@@ -153,7 +153,7 @@ function buildTimerEvent(data: DataView): GanTimerEvent {
 async function connectGanTimer(): Promise<GanTimerConnection> {
 
     // Request user for the bluetooth device (popup selection dialog)
-    var device = await navigator.bluetooth.requestDevice(
+    var device = await (navigator as Navigator & { bluetooth: Bluetooth }).bluetooth.requestDevice(
         {
             filters: [
                 { namePrefix: "GAN" },

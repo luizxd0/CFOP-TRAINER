@@ -102,7 +102,7 @@ async function connectGanCube(customMacAddressProvider?: MacAddressProvider): Pr
     const cicFilters: BluetoothLEScanFilter[] = def.GAN_CIC_LIST.map((companyIdentifier) => ({
         manufacturerData: [{ companyIdentifier }],
     }));
-    var device: BluetoothDeviceWithMAC = await navigator.bluetooth.requestDevice(
+    var device: BluetoothDeviceWithMAC = await (navigator as Navigator & { bluetooth: Bluetooth }).bluetooth.requestDevice(
         {
             filters: [...nameFilters, ...cicFilters],
             optionalServices: [

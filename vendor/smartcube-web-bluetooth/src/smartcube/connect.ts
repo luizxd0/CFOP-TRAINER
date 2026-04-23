@@ -145,7 +145,7 @@ export async function connectSmartCube(
     });
     opts.onStatus?.('Select your cube…');
 
-    const device = await navigator.bluetooth.requestDevice(requestOptions);
+    const device = await (navigator as Navigator & { bluetooth: Bluetooth }).bluetooth.requestDevice(requestOptions);
 
     opts.onStatus?.('Reading advertisements…');
     const advertisementManufacturerData = await waitForManufacturerData(
