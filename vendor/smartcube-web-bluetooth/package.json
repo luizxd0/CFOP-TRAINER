@@ -1,0 +1,62 @@
+{
+  "name": "smartcube-web-bluetooth",
+  "version": "4.0.0",
+  "description": "Library for interaction with Smart Cubes (GAN, Giiker, GoCube, MoYu, QiYi) and GAN Smart Timers using Web Bluetooth API",
+  "private": false,
+  "types": "./dist/types/index.d.ts",
+  "module": "./dist/esm/index.mjs",
+  "main": "./dist/cjs/index.cjs",
+  "exports": {
+    "types": "./dist/types/index.d.ts",
+    "import": "./dist/esm/index.mjs",
+    "require": "./dist/cjs/index.cjs"
+  },
+  "scripts": {},
+  "keywords": [
+    "GAN",
+    "GANCUBE",
+    "Giiker",
+    "GoCube",
+    "MoYu",
+    "QiYi",
+    "Timer",
+    "GAN Smart Timer",
+    "GAN Smart Cube",
+    "Smart Timer",
+    "Smart Cube",
+    "Bluetooth",
+    "Web Bluetooth",
+    "Cubing",
+    "Speedcubing",
+    "Rubik's Cube"
+  ],
+  "author": "Andy Fedotov and Pau Oliva",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/poliva/smartcube-web-bluetooth.git"
+  },
+  "dependencies": {
+    "@types/web-bluetooth": "^0.0.20",
+    "aes-js": "^3.1.2",
+    "lz-string": "^1.5.0",
+    "rxjs": "^7.8.2"
+  },
+  "devDependencies": {
+    "@rollup/plugin-typescript": "^11.1.6",
+    "@types/aes-js": "^3.1.4",
+    "@types/node": "^22.19.15",
+    "rollup": "^4.60.0",
+    "typescript": "^5.9.3",
+    "happy-dom": "^18.0.1",
+    "vitest": "^3.2.4",
+    "vitest-mock-extended": "^2.0.2"
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md",
+    "LICENSE.txt",
+    "package.json"
+  ]
+}
