@@ -34,7 +34,9 @@ jobs:
           node-version: "24"
           cache: npm
 
-      - uses: actions/configure-pages@v5
+      - uses: actions/configure-pages@v5.0.1
+        with:
+          enablement: true
 
       - name: Install
         run: npm ci
