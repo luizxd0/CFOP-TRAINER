@@ -5495,19 +5495,27 @@ async function connectSmartCube(arg) {
             if (!aborted) {
                 removeCachedMacForDevice(device);
             }
-            try {
-                device.gatt?.disconnect();
-            }
-            catch {
-                /* ignore */
-            }
             if (aborted) {
+                try {
+                    device.gatt?.disconnect();
+                }
+                catch {
+                    /* ignore */
+                }
                 throw e;
             }
             if (e instanceof TimeoutError) {
-                throw new Error('Timed out waiting for cube data. Check the Bluetooth MAC address and try again.');
+                opts.onStatus?.('Connected (verification timed out; waiting for cube data)…');
             }
-            throw e;
+            else {
+                try {
+                    device.gatt?.disconnect();
+                }
+                catch {
+                    /* ignore */
+                }
+                throw e;
+            }
         }
         setCachedMacForDevice(device, conn.deviceMAC);
     }
