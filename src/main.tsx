@@ -1187,6 +1187,7 @@ function App() {
   });
   const [scramble, setScramble] = useState("R U R' U' F R U R' U' F'");
   const [isLoadingScramble, setIsLoadingScramble] = useState(false);
+  const shouldKeepScreenAwake = smartCubeConnected || timerRunning;
 
   useEffect(() => {
     if (typeof document !== "undefined") {
@@ -1223,7 +1224,12 @@ function App() {
     };
 
     const requestWakeLock = async () => {
-      if (disposed || document.visibilityState !== "visible" || wakeLock) {
+      if (
+        disposed ||
+        !shouldKeepScreenAwake ||
+        document.visibilityState !== "visible" ||
+        wakeLock
+      ) {
         return;
       }
       try {
@@ -1244,23 +1250,19 @@ function App() {
       }
     };
 
-    const handleUserInteraction = () => {
-      void requestWakeLock();
-    };
-
     document.addEventListener("visibilitychange", handleVisibilityChange);
-    window.addEventListener("pointerdown", handleUserInteraction, { passive: true });
-    window.addEventListener("keydown", handleUserInteraction);
-    void requestWakeLock();
+    if (shouldKeepScreenAwake) {
+      void requestWakeLock();
+    } else {
+      void releaseWakeLock();
+    }
 
     return () => {
       disposed = true;
       document.removeEventListener("visibilitychange", handleVisibilityChange);
-      window.removeEventListener("pointerdown", handleUserInteraction);
-      window.removeEventListener("keydown", handleUserInteraction);
       void releaseWakeLock();
     };
-  }, []);
+  }, [shouldKeepScreenAwake]);
 
   const stageCases = useMemo(() => casesForStage(stage), [stage]);
   const availableDifficulties = useMemo(
