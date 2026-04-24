@@ -1,0 +1,17 @@
+{
+  "name": "CFOP Trainer",
+  "short_name": "CFOP",
+  "description": "Train CFOP algorithms, cases, and smart cube sessions.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#060915",
+  "theme_color": "#111827",
+  "icons": [
+    {
+      "src": "/app-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
