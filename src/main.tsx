@@ -145,6 +145,8 @@ type OrbitSlot = { orbit: string; index: number };
 const CROSS_EDGE_SLOTS = [4, 5, 6, 7] as const;
 const F2L_EDGE_SLOTS = [8, 9, 10, 11] as const;
 const F2L_CORNER_SLOTS = [4, 5, 6, 7] as const;
+const CROSS_RECENT_VARIETY_WINDOW = 24;
+const CROSS_MAX_UNIQUE_ATTEMPTS = 14;
 
 function splitAlgTokens(alg: string): string[] {
   return alg
@@ -1266,6 +1268,7 @@ function App() {
   const [selectedCaseId, setSelectedCaseId] = useState("cross-1");
   const [contextAlg, setContextAlg] = useState("");
   const [crossRefresh, setCrossRefresh] = useState(0);
+  const recentCrossSetupsByDifficultyRef = useRef<Record<number, string[]>>({});
   const [crossGenerated, setCrossGenerated] = useState<{
     setup: string;
     solution: string;
@@ -1746,18 +1749,36 @@ function App() {
       error: null,
     }));
 
-    void generateExactCrossCase(crossDifficulty)
-      .then((result) => {
-        if (cancelled) {
-          return;
+    void (async () => {
+      const recent = recentCrossSetupsByDifficultyRef.current[crossDifficulty] ?? [];
+      let fallback: Awaited<ReturnType<typeof generateExactCrossCase>> | null = null;
+      let picked: Awaited<ReturnType<typeof generateExactCrossCase>> | null = null;
+
+      for (let attempt = 0; attempt < CROSS_MAX_UNIQUE_ATTEMPTS; attempt += 1) {
+        const next = await generateExactCrossCase(crossDifficulty);
+        fallback = fallback ?? next;
+        if (!recent.includes(next.setup)) {
+          picked = next;
+          break;
         }
-        setCrossGenerated({
-          setup: result.setup,
-          solution: result.solution,
-          loading: false,
-          error: null,
-        });
-      })
+      }
+
+      const result = picked ?? fallback;
+      if (!result || cancelled) {
+        return;
+      }
+
+      const dedupedRecent = recent.filter((setup) => setup !== result.setup);
+      const updatedRecent = [...dedupedRecent, result.setup].slice(-CROSS_RECENT_VARIETY_WINDOW);
+      recentCrossSetupsByDifficultyRef.current[crossDifficulty] = updatedRecent;
+
+      setCrossGenerated({
+        setup: result.setup,
+        solution: result.solution,
+        loading: false,
+        error: null,
+      });
+    })()
       .catch((error) => {
         if (cancelled) {
           return;
