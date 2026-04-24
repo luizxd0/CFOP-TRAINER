@@ -22,9 +22,9 @@ import { cube3x3x3 } from "cubing/puzzles";
 import { TwistyPlayer } from "cubing/twisty";
 import {
   connectSmartCube as connectAnySmartCube,
-  type MacAddressProvider,
   type SmartCubeConnection,
-} from "smartcube-web-bluetooth";
+} from "../vendor/smartcube-web-bluetooth/src/smartcube/index";
+import type { MacAddressProvider } from "../vendor/smartcube-web-bluetooth/src/smartcube/types";
 import { CubieCube } from "../vendor/smartcube-web-bluetooth/src/smartcube/cubie-cube";
 import {
   buildContextForStage,

@@ -1,4 +1,4 @@
-import { filter, take, TimeoutError, type Subscription } from 'rxjs';
+import { filter, ReplaySubject, take, TimeoutError, type Subscription } from 'rxjs';
 import { buildRequestDeviceOptions } from './attachment/build-picker-options';
 import { collectPrimaryServiceUuids } from './attachment/gatt-snapshot';
 import { resolveProtocolByGatt } from './attachment/profile-rank';
@@ -25,6 +25,7 @@ function isMacCacheProofEvent(e: SmartCubeEvent): boolean {
 
 const MAC_VERIFY_TIMEOUT_MS = 10_000;
 const MAC_VERIFY_RETRY_TIMEOUT_MS = 15_000;
+const EVENT_REPLAY_BUFFER = 96;
 
 /**
  * After we subscribe for MAC proof, ask the cube for a fresh report. Init often emits
@@ -193,16 +194,48 @@ export async function connectSmartCube(
         }
         throw e;
     }
+
+    // Bridge events through a replay buffer so startup packets emitted during
+    // connection/verification are still visible after connect() resolves.
+    const replay = new ReplaySubject<SmartCubeEvent>(EVENT_REPLAY_BUFFER);
+    const bridgeSub = conn.events$.subscribe({
+        next: (event) => replay.next(event),
+        error: (error) => replay.error(error),
+        complete: () => replay.complete(),
+    });
+    const bridgedConn: SmartCubeConnection = {
+        get deviceName() {
+            return conn.deviceName;
+        },
+        get deviceMAC() {
+            return conn.deviceMAC;
+        },
+        get protocol() {
+            return conn.protocol;
+        },
+        get capabilities() {
+            return conn.capabilities;
+        },
+        events$: replay.asObservable(),
+        sendCommand(command) {
+            return conn.sendCommand(command);
+        },
+        async disconnect() {
+            bridgeSub.unsubscribe();
+            await conn.disconnect();
+        },
+    };
+
     if (conn.deviceMAC) {
         let verified = false;
         opts.onStatus?.('Verifying connection…');
         try {
             const verifyPromise = waitForVerifiedCubeEvent(
-                conn,
+                bridgedConn,
                 MAC_VERIFY_TIMEOUT_MS,
                 opts.signal
             );
-            requestFreshStateForMacVerify(conn);
+            requestFreshStateForMacVerify(bridgedConn);
             await verifyPromise;
             verified = true;
         } catch (e) {
@@ -219,7 +252,7 @@ export async function connectSmartCube(
                 // Some devices only emit first proof packet after a physical turn.
                 opts.onStatus?.('Waiting for first cube packet… turn one face to confirm connection');
                 try {
-                    await waitForVerifiedCubeEvent(conn, MAC_VERIFY_RETRY_TIMEOUT_MS, opts.signal);
+                    await waitForVerifiedCubeEvent(bridgedConn, MAC_VERIFY_RETRY_TIMEOUT_MS, opts.signal);
                     verified = true;
                 } catch (retryError) {
                     const retryAborted =
@@ -235,7 +268,7 @@ export async function connectSmartCube(
                     // Keep connection alive; avoid persisting possibly wrong MAC when proof was not observed.
                     removeCachedMacForDevice(device);
                     opts.onStatus?.('Connected (verification timed out; data may appear after first move)');
-                    return conn;
+                    return bridgedConn;
                 }
             } else {
                 removeCachedMacForDevice(device);
@@ -251,5 +284,5 @@ export async function connectSmartCube(
             setCachedMacForDevice(device, conn.deviceMAC);
         }
     }
-    return conn;
+    return bridgedConn;
 }
