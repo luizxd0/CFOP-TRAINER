@@ -1,5 +1,12 @@
-const CACHE_NAME = "cfop-trainer-shell-v1";
-const APP_SHELL = ["/", "/site.webmanifest", "/app-icon.svg"];
+const CACHE_NAME = "cfop-trainer-shell-v2";
+const scopeUrl = new URL(self.registration.scope);
+const APP_SHELL = [
+  scopeUrl.pathname,
+  new URL("site.webmanifest", self.registration.scope).pathname,
+  new URL("app-icon.svg", self.registration.scope).pathname,
+  new URL("app-icon-192.png", self.registration.scope).pathname,
+  new URL("app-icon-512.png", self.registration.scope).pathname,
+];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -29,6 +36,6 @@ self.addEventListener("fetch", (event) => {
         });
         return response;
       })
-      .catch(() => caches.match(event.request).then((cached) => cached || caches.match("/"))),
+      .catch(() => caches.match(event.request).then((cached) => cached || caches.match(scopeUrl.pathname))),
   );
 });
