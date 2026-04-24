@@ -523,6 +523,9 @@ function CubeViewer({
   const vantageRef = useRef<{ render?: () => void } | null>(null);
   const gyroBasisRef = useRef<THREE.Quaternion | null>(null);
   const rafRef = useRef<number | null>(null);
+  const liveSetupTokensRef = useRef<string[]>([]);
+  const liveSyncReadyRef = useRef(false);
+  const liveOrientationRef = useRef<CubeOrientation | null>(null);
   const homeOrientationRef = useRef(
     new THREE.Quaternion().setFromEuler(new THREE.Euler((15 * Math.PI) / 180, (-5 * Math.PI) / 180, 0)),
   );
@@ -565,6 +568,9 @@ function CubeViewer({
       puzzleObjectRef.current = null;
       vantageRef.current = null;
       gyroBasisRef.current = null;
+      liveSetupTokensRef.current = [];
+      liveSyncReadyRef.current = false;
+      liveOrientationRef.current = null;
       liveTargetQuaternionRef.current = new THREE.Quaternion().setFromEuler(
         new THREE.Euler((15 * Math.PI) / 180, (-20 * Math.PI) / 180, 0),
       );
@@ -572,12 +578,61 @@ function CubeViewer({
   }, []);
 
   useEffect(() => {
-    if (!playerRef.current) {
+    const player = playerRef.current;
+    if (!player) {
       return;
     }
-    playerRef.current.controlPanel = isLive ? "none" : "bottom-row";
-    playerRef.current.experimentalSetupAlg = joinAlgs([orientationPrefix(cubeOrientation), setup]);
-    playerRef.current.alg = alg;
+
+    player.controlPanel = isLive ? "none" : "bottom-row";
+    player.tempoScale = isLive ? 2.5 : 1;
+
+    if (!isLive) {
+      liveSetupTokensRef.current = [];
+      liveSyncReadyRef.current = false;
+      liveOrientationRef.current = null;
+      player.experimentalSetupAlg = joinAlgs([orientationPrefix(cubeOrientation), setup]);
+      player.alg = alg;
+      return;
+    }
+
+    const nextTokens = splitAlgTokens(setup);
+    const previousTokens = liveSetupTokensRef.current;
+    const orientationChanged = liveOrientationRef.current !== cubeOrientation;
+    const isPrefix =
+      nextTokens.length >= previousTokens.length &&
+      previousTokens.every((token, index) => token === nextTokens[index]);
+
+    if (!liveSyncReadyRef.current || orientationChanged || !isPrefix) {
+      player.experimentalSetupAlg = joinAlgs([orientationPrefix(cubeOrientation), setup]);
+      player.alg = "";
+      player.jumpToEnd({ flash: false });
+      liveSetupTokensRef.current = nextTokens;
+      liveSyncReadyRef.current = true;
+      liveOrientationRef.current = cubeOrientation;
+      return;
+    }
+
+    if (nextTokens.length > previousTokens.length) {
+      const appended = nextTokens.slice(previousTokens.length);
+      for (const token of appended) {
+        player.experimentalAddMove(token, { cancel: false });
+      }
+      liveSetupTokensRef.current = nextTokens;
+      liveOrientationRef.current = cubeOrientation;
+      return;
+    }
+
+    if (nextTokens.length === previousTokens.length) {
+      liveOrientationRef.current = cubeOrientation;
+      return;
+    }
+
+    player.experimentalSetupAlg = joinAlgs([orientationPrefix(cubeOrientation), setup]);
+    player.alg = "";
+    player.jumpToEnd({ flash: false });
+    liveSetupTokensRef.current = nextTokens;
+    liveSyncReadyRef.current = true;
+    liveOrientationRef.current = cubeOrientation;
   }, [setup, alg, cubeOrientation, isLive]);
 
   useEffect(() => {
@@ -892,7 +947,6 @@ function SmartCubePanel({
     setStatus(`Connected via ${conn.protocol.name}`);
     gyroBasisForMovesRef.current = null;
     gyroRelativeForMovesRef.current.identity();
-    emitResetLiveState();
     emitConnectionChange(true);
     setOrientation(
       conn.capabilities.gyroscope ? "Waiting for gyro data" : "Gyro not supported by this protocol",
@@ -1031,7 +1085,6 @@ function SmartCubePanel({
       setOrientation("Waiting for gyro data");
       gyroBasisForMovesRef.current = null;
       gyroRelativeForMovesRef.current.identity();
-      emitResetLiveState();
       emitGyro(null);
       await connectUsingSmartCubeApi();
     } catch (error) {
@@ -1663,14 +1716,15 @@ function App() {
       pendingFaceletsBootstrapRef.current = true;
       pendingFaceletsValueRef.current = null;
       setSmartCubeGyroSession((current) => current + 1);
-      hardResetLiveCubeState();
+      // Keep current visual state until we bootstrap from FACELETS, then swap to real cube state.
+      resetTrainingSessionFromCurrentState();
       return;
     }
     pendingFaceletsBootstrapRef.current = false;
     pendingFaceletsValueRef.current = null;
     setSmartCubeGyro(null);
     hardResetLiveCubeState();
-  }, [hardResetLiveCubeState]);
+  }, [hardResetLiveCubeState, resetTrainingSessionFromCurrentState]);
 
   const handleSmartCubeResetLiveState = useCallback(() => {
     pendingFaceletsBootstrapRef.current = false;
