@@ -40,8 +40,17 @@ import "./styles.css";
 
 type CubeOrientation = "yellow-top" | "white-top";
 type ThemeMode = "light" | "dark";
+type AppMode = "trainer" | "free";
 type GyroQuaternion = { x: number; y: number; z: number; w: number };
 type CubeKpuzzle = Awaited<ReturnType<typeof cube3x3x3.kpuzzle>>;
+type FreeSolveRecord = {
+  totalMs: number;
+  crossMs: number;
+  f2lMs: number;
+  ollMs: number;
+  pllMs: number;
+  finishedAt: number;
+};
 type WakeLockSentinelLike = {
   released: boolean;
   release(): Promise<void>;
@@ -172,12 +181,42 @@ const F2L_EDGE_SLOTS = [8, 9, 10, 11] as const;
 const F2L_CORNER_SLOTS = [4, 5, 6, 7] as const;
 const CROSS_RECENT_VARIETY_WINDOW = 24;
 const CROSS_MAX_UNIQUE_ATTEMPTS = 14;
+const FREE_INSPECTION_MS = 15_000;
 
 function splitAlgTokens(alg: string): string[] {
   return alg
     .split(/\s+/)
     .map((token) => token.trim())
     .filter((token) => token.length > 0);
+}
+
+function generateRandomScramble(length = 20): string {
+  const faces = ["U", "D", "R", "L", "F", "B"] as const;
+  const suffixes = ["", "'", "2"] as const;
+  const axisByFace: Record<(typeof faces)[number], number> = {
+    U: 0,
+    D: 0,
+    R: 1,
+    L: 1,
+    F: 2,
+    B: 2,
+  };
+  const tokens: string[] = [];
+  let prevFace: (typeof faces)[number] | null = null;
+  let prevAxis: number | null = null;
+
+  for (let i = 0; i < length; i += 1) {
+    const candidates = faces.filter(
+      (face) => face !== prevFace && axisByFace[face] !== prevAxis,
+    );
+    const face = candidates[Math.floor(Math.random() * candidates.length)] ?? faces[0];
+    const suffix = suffixes[Math.floor(Math.random() * suffixes.length)] ?? "";
+    tokens.push(`${face}${suffix}`);
+    prevFace = face;
+    prevAxis = axisByFace[face];
+  }
+
+  return tokens.join(" ");
 }
 
 function remapAlgForOrientation(alg: string, orientation: CubeOrientation): string {
@@ -843,6 +882,9 @@ function CubeViewer({
           <h2>{title}</h2>
         </div>
         <div className="chip-row">
+          {timerLabel && (
+            <span className={`timer-chip ${isTimerRunning ? "running" : ""}`}>{timerLabel}</span>
+          )}
           <span className="chip">{isLive ? `${contextMoves} live turns` : `${moveCount(setup)} prep moves`}</span>
           {!isLive && contextMoves > 0 && <span className="chip">{contextMoves} context moves</span>}
         </div>
@@ -853,7 +895,6 @@ function CubeViewer({
           <div className="live-guide-strip">
             <div className="live-guide-head">
               <span>Setup Algorithm</span>
-              <b className={isTimerRunning ? "running" : ""}>{timerLabel ?? "0.00"}</b>
             </div>
             <div className="live-guide-steps">
               {guideSteps.length === 0 ? (
@@ -893,6 +934,7 @@ function SmartCubePanel({
   onConnectionChange,
   onResetLiveState,
   cubeOrientation,
+  freeLastSolves,
 }: {
   onMove?: (move: { raw: string; display: string }) => void;
   onGyro?: (quaternion: GyroQuaternion | null) => void;
@@ -900,6 +942,7 @@ function SmartCubePanel({
   onConnectionChange?: (connected: boolean) => void;
   onResetLiveState?: () => void;
   cubeOrientation: CubeOrientation;
+  freeLastSolves: FreeSolveRecord[];
 }) {
   const [support, setSupport] = useState("Checking browser support...");
   const [status, setStatus] = useState("Not connected");
@@ -913,6 +956,8 @@ function SmartCubePanel({
   });
   const [battery, setBattery] = useState<number | null>(null);
   const [orientation, setOrientation] = useState("Waiting for gyro data");
+  const [isConnected, setIsConnected] = useState(false);
+  const [showBluetoothDetails, setShowBluetoothDetails] = useState(true);
   const smartRef = useRef<SmartCubeConnection | null>(null);
   const smartSubscriptionRef = useRef<{ unsubscribe: () => void } | null>(null);
   const gyroBasisForMovesRef = useRef<THREE.Quaternion | null>(null);
@@ -1034,6 +1079,8 @@ function SmartCubePanel({
     setPreferredDeviceName(nextName);
     setDeviceMac(conn.deviceMAC || "Unknown");
     setStatus(`Connected via ${conn.protocol.name}`);
+    setIsConnected(true);
+    setShowBluetoothDetails(false);
     gyroBasisForMovesRef.current = null;
     gyroRelativeForMovesRef.current.identity();
     emitConnectionChange(true);
@@ -1110,6 +1157,8 @@ function SmartCubePanel({
           break;
         case "DISCONNECT":
           setStatus("Disconnected");
+          setIsConnected(false);
+          setShowBluetoothDetails(true);
           gyroBasisForMovesRef.current = null;
           gyroRelativeForMovesRef.current.identity();
           emitConnectionChange(false);
@@ -1285,6 +1334,8 @@ function SmartCubePanel({
     void smartRef.current?.disconnect();
     smartRef.current = null;
     setStatus("Disconnected");
+    setIsConnected(false);
+    setShowBluetoothDetails(true);
     gyroBasisForMovesRef.current = null;
     gyroRelativeForMovesRef.current.identity();
     emitConnectionChange(false);
@@ -1298,6 +1349,17 @@ function SmartCubePanel({
 
   const bluetoothBlockedReason = webBluetoothBlockReason();
   const connectDisabled = bluetoothBlockedReason !== null;
+  const rankedBestSolves = useMemo(
+    () => [...freeLastSolves].sort((a, b) => a.totalMs - b.totalMs).slice(0, 5),
+    [freeLastSolves],
+  );
+  const rankedAverageMs = useMemo(() => {
+    if (rankedBestSolves.length === 0) {
+      return null;
+    }
+    const total = rankedBestSolves.reduce((sum, solve) => sum + solve.totalMs, 0);
+    return total / rankedBestSolves.length;
+  }, [rankedBestSolves]);
 
   return (
     <section className="smart-panel">
@@ -1308,9 +1370,6 @@ function SmartCubePanel({
         </div>
         <Radio size={20} />
       </div>
-      <p className="support-note">
-        Bluetooth picker is filtered to supported smart-cube devices.
-      </p>
       <div className="connection-grid">
         <button
           className="primary-button"
@@ -1329,32 +1388,65 @@ function SmartCubePanel({
           <TimerReset size={18} />
           Reset cube state
         </button>
+        {isConnected && (
+          <button
+            className="ghost-button span-2"
+            onClick={() => setShowBluetoothDetails((value) => !value)}
+          >
+            {showBluetoothDetails ? <EyeOff size={18} /> : <Eye size={18} />}
+            {showBluetoothDetails ? "Hide Bluetooth details" : "Show Bluetooth details"}
+          </button>
+        )}
       </div>
-      <div className="status-list">
-        <p>
-          <span>Support</span>
-          {support}
-        </p>
-        <p>
-          <span>Status</span>
-          {status}
-        </p>
-        <p>
-          <span>Device</span>
-          {deviceName}
-        </p>
-        <p>
-          <span>Device MAC</span>
-          {deviceMac}
-        </p>
-        <p>
-          <span>Battery</span>
-          {battery === null ? "Unknown" : `${battery}%`}
-        </p>
-        <p>
-          <span>Gyro</span>
-          {orientation}
-        </p>
+      {showBluetoothDetails && (
+        <>
+          <p className="support-note">
+            Bluetooth picker is filtered to supported smart-cube devices.
+          </p>
+          <div className="status-list">
+            <p>
+              <span>Support</span>
+              {support}
+            </p>
+            <p>
+              <span>Status</span>
+              {status}
+            </p>
+            <p>
+              <span>Device</span>
+              {deviceName}
+            </p>
+            <p>
+              <span>Device MAC</span>
+              {deviceMac}
+            </p>
+            <p>
+              <span>Battery</span>
+              {battery === null ? "Unknown" : `${battery}%`}
+            </p>
+            <p>
+              <span>Gyro</span>
+              {orientation}
+            </p>
+          </div>
+        </>
+      )}
+      <div className="alg-block solution smart-best-panel">
+        <div className="alg-title">
+          <span>Best of Last 5</span>
+        </div>
+        {rankedBestSolves.length === 0 ? (
+          <p>No solves yet.</p>
+        ) : (
+          <>
+            {rankedBestSolves.map((solve, index) => (
+              <p key={`${solve.finishedAt}-${index}`}>
+                {index + 1}. {formatMs(solve.totalMs)}
+              </p>
+            ))}
+            <p>Average: {rankedAverageMs === null ? "--" : formatMs(rankedAverageMs)}</p>
+          </>
+        )}
       </div>
     </section>
   );
@@ -1437,8 +1529,59 @@ function AlgorithmCard({
   );
 }
 
+function FreePracticePanel({
+  scramble,
+  inspectionEnabled,
+  inspectionRunning,
+  inspectionRemainingMs,
+  timerLabel,
+  stepMarks,
+}: {
+  scramble: string;
+  inspectionEnabled: boolean;
+  inspectionRunning: boolean;
+  inspectionRemainingMs: number | null;
+  timerLabel: string;
+  stepMarks: { crossMs: number | null; f2lMs: number | null; ollMs: number | null };
+}) {
+  const inspectionText = inspectionEnabled
+    ? inspectionRunning
+      ? `${Math.max(0, Math.ceil((inspectionRemainingMs ?? 0) / 1000))}s`
+      : inspectionRemainingMs === 0
+        ? "Done"
+        : "Ready"
+    : "Unlimited";
+  return (
+    <section className="algorithm-panel">
+      <div className="section-heading">
+        <div>
+          <p className="eyebrow">Free Practice</p>
+          <h2>Random Scramble</h2>
+        </div>
+        <span className="difficulty">{timerLabel}</span>
+      </div>
+      <div className="alg-block">
+        <div className="alg-title">
+          <span>Scramble</span>
+        </div>
+        <code>{scramble}</code>
+      </div>
+      <div className="alg-block">
+        <div className="alg-title">
+          <span>Current Split Marks</span>
+        </div>
+        <p>Inspection: {inspectionText}</p>
+        <p>Cross: {stepMarks.crossMs === null ? "--" : formatMs(stepMarks.crossMs)}</p>
+        <p>F2L: {stepMarks.f2lMs === null ? "--" : formatMs(stepMarks.f2lMs)}</p>
+        <p>OLL: {stepMarks.ollMs === null ? "--" : formatMs(stepMarks.ollMs)}</p>
+      </div>
+    </section>
+  );
+}
+
 function App() {
   const [themeMode, setThemeMode] = useState<ThemeMode>(initialThemeMode);
+  const [mode, setMode] = useState<AppMode>("trainer");
   const [stage, setStage] = useState<Stage>("cross");
   const [cubeOrientation, setCubeOrientation] =
     useState<CubeOrientation>("yellow-top");
@@ -1459,6 +1602,21 @@ function App() {
   const [timerRunning, setTimerRunning] = useState(false);
   const [timerStartAt, setTimerStartAt] = useState<number | null>(null);
   const [timerElapsedMs, setTimerElapsedMs] = useState(0);
+  const [freeInspectionEnabled, setFreeInspectionEnabled] = useState(true);
+  const [freeInspectionRunning, setFreeInspectionRunning] = useState(false);
+  const [freeInspectionRemainingMs, setFreeInspectionRemainingMs] = useState<number | null>(null);
+  const [freeScramble, setFreeScramble] = useState(generateRandomScramble);
+  const [freeStepMarks, setFreeStepMarks] = useState<{
+    crossMs: number | null;
+    f2lMs: number | null;
+    ollMs: number | null;
+  }>({
+    crossMs: null,
+    f2lMs: null,
+    ollMs: null,
+  });
+  const [freeLastSolves, setFreeLastSolves] = useState<FreeSolveRecord[]>([]);
+  const freeSolveLoggedRef = useRef(false);
   const [cubeKpuzzle, setCubeKpuzzle] = useState<CubeKpuzzle | null>(null);
   const setupGuideCompleteRef = useRef(false);
   const prevSetupGuideCompleteRef = useRef(false);
@@ -1563,6 +1721,7 @@ function App() {
     };
   }, [shouldKeepScreenAwake]);
 
+  const isFreeMode = mode === "free";
   const stageCases = useMemo(() => casesForStage(stage), [stage]);
   const availableDifficulties = useMemo(
     () => [...new Set(stageCases.map((item) => item.difficulty))].sort((a, b) => a - b),
@@ -1612,6 +1771,10 @@ function App() {
   }, [activeCase, contextAlg, crossDifficulty, crossGenerated, isCross]);
 
   const solution = activeCaseWithTrainingSetup.solutions[0].alg;
+  const freeScrambleForOrientation = useMemo(
+    () => remapAlgForOrientation(freeScramble, cubeOrientation),
+    [cubeOrientation, freeScramble],
+  );
   const setupAlgForOrientation = useMemo(
     () => remapAlgForOrientation(activeCaseWithTrainingSetup.setup, cubeOrientation),
     [activeCaseWithTrainingSetup.setup, cubeOrientation],
@@ -1631,21 +1794,30 @@ function App() {
         .join(" "),
     [cubeOrientation, liveSessionStartMoves],
   );
+  const targetSetupAlgForOrientation = isFreeMode ? freeScrambleForOrientation : setupAlgForOrientation;
   const setupGuideAlg = useMemo(
     () => {
       const raw = smartCubeConnected
-        ? (sessionAwareSetupAlg ?? setupAlgForOrientation)
-        : setupAlgForOrientation;
+        ? (sessionAwareSetupAlg ?? targetSetupAlgForOrientation)
+        : targetSetupAlgForOrientation;
       return simplifyAlgText(raw);
     },
-    [sessionAwareSetupAlg, setupAlgForOrientation, smartCubeConnected],
+    [sessionAwareSetupAlg, smartCubeConnected, targetSetupAlgForOrientation],
   );
   const isLiveViewer = smartCubeConnected;
-  const viewerTitle = isLiveViewer ? "Live Smart Cube" : activeCaseWithTrainingSetup.name;
+  const viewerTitle = isLiveViewer
+    ? "Live Smart Cube"
+    : isFreeMode
+      ? "Free Practice"
+      : activeCaseWithTrainingSetup.name;
   // In live mode we must use setup (not alg) so the cube shows current state immediately.
-  const viewerSetup = isLiveViewer ? smartCubeAlg : activeCaseWithTrainingSetup.setup;
-  const viewerAlg = isLiveViewer ? "" : solution;
-  const viewerContextMoves = isLiveViewer ? liveSessionMoveCount : moveCount(contextAlg);
+  const viewerSetup = isLiveViewer
+    ? smartCubeAlg
+    : isFreeMode
+      ? freeScramble
+      : activeCaseWithTrainingSetup.setup;
+  const viewerAlg = isLiveViewer || isFreeMode ? "" : solution;
+  const viewerContextMoves = isLiveViewer ? liveSessionMoveCount : isFreeMode ? 0 : moveCount(contextAlg);
   const setupGuideStepViews = useMemo(
     () => {
       const full = setupGuideSteps.map(guideStepView);
@@ -1660,7 +1832,12 @@ function App() {
     },
     [setupGuideSteps],
   );
-  const timerLabel = useMemo(() => formatMs(timerElapsedMs), [timerElapsedMs]);
+  const timerLabel = useMemo(() => {
+    if (isFreeMode && freeInspectionEnabled && freeInspectionRunning) {
+      return `I ${Math.max(0, Math.ceil((freeInspectionRemainingMs ?? 0) / 1000))}s`;
+    }
+    return formatMs(timerElapsedMs);
+  }, [freeInspectionEnabled, freeInspectionRemainingMs, freeInspectionRunning, isFreeMode, timerElapsedMs]);
   const currentLivePattern = useMemo(
     () => (cubeKpuzzle ? cubeKpuzzle.defaultPattern().applyAlg(smartCubeAlg) : null),
     [cubeKpuzzle, smartCubeAlg],
@@ -1670,15 +1847,19 @@ function App() {
     [cubeKpuzzle],
   );
   const setupTargetPattern = useMemo(
-    () => (cubeKpuzzle ? cubeKpuzzle.defaultPattern().applyAlg(setupAlgForOrientation) : null),
-    [cubeKpuzzle, setupAlgForOrientation],
+    () => (cubeKpuzzle ? cubeKpuzzle.defaultPattern().applyAlg(targetSetupAlgForOrientation) : null),
+    [cubeKpuzzle, targetSetupAlgForOrientation],
   );
   const solvedTargetPattern = useMemo(
-    () =>
-      setupTargetPattern
+    () => {
+      if (isFreeMode) {
+        return solvedPattern;
+      }
+      return setupTargetPattern
         ? setupTargetPattern.applyAlg(solutionAlgForOrientation)
-        : null,
-    [setupTargetPattern, solutionAlgForOrientation],
+        : null;
+    },
+    [isFreeMode, setupTargetPattern, solutionAlgForOrientation, solvedPattern],
   );
   const requiredSolvedSlots = useMemo(() => {
     if (!setupTargetPattern || !solvedTargetPattern || !solvedPattern) {
@@ -1698,6 +1879,10 @@ function App() {
       current.length >= 19 ? [move.display] : [...current, move.display],
     );
     if (setupGuideCompleteRef.current) {
+      if (isFreeMode && freeInspectionRunning) {
+        setFreeInspectionRunning(false);
+        setFreeInspectionRemainingMs(0);
+      }
       setMovesAfterSetup((current) => current + 1);
       return;
     }
@@ -1762,7 +1947,7 @@ function App() {
       }
       return next;
     });
-  }, [cubeOrientation]);
+  }, [cubeOrientation, freeInspectionRunning, isFreeMode]);
 
   const handleSmartCubeGyro = useCallback((quaternion: GyroQuaternion | null) => {
     setSmartCubeGyro(quaternion);
@@ -1784,6 +1969,10 @@ function App() {
     setTimerRunning(false);
     setTimerStartAt(null);
     setTimerElapsedMs(0);
+    setFreeInspectionRunning(false);
+    setFreeInspectionRemainingMs(null);
+    setFreeStepMarks({ crossMs: null, f2lMs: null, ollMs: null });
+    freeSolveLoggedRef.current = false;
   }, []);
 
   const resetTrainingSessionFromCurrentState = useCallback(() => {
@@ -1801,6 +1990,10 @@ function App() {
     setTimerRunning(false);
     setTimerStartAt(null);
     setTimerElapsedMs(0);
+    setFreeInspectionRunning(false);
+    setFreeInspectionRemainingMs(null);
+    setFreeStepMarks({ crossMs: null, f2lMs: null, ollMs: null });
+    freeSolveLoggedRef.current = false;
   }, []);
 
   const attemptFaceletsBootstrap = useCallback(() => {
@@ -1885,14 +2078,30 @@ function App() {
 
   const handleStageChange = useCallback(
     (nextStage: Stage) => {
-      if (nextStage === stage) {
+      const modeSwitch = mode !== "trainer";
+      if (!modeSwitch && nextStage === stage) {
         return;
       }
       resetTrainingSessionFromCurrentState();
+      setMode("trainer");
       setStage(nextStage);
     },
-    [resetTrainingSessionFromCurrentState, stage],
+    [mode, resetTrainingSessionFromCurrentState, stage],
   );
+
+  const handleFreeMode = useCallback(() => {
+    if (mode === "free") {
+      return;
+    }
+    resetTrainingSessionFromCurrentState();
+    setMode("free");
+    setFreeScramble(generateRandomScramble());
+  }, [mode, resetTrainingSessionFromCurrentState]);
+
+  const handleNewFreeScramble = useCallback(() => {
+    resetTrainingSessionFromCurrentState();
+    setFreeScramble(generateRandomScramble());
+  }, [resetTrainingSessionFromCurrentState]);
 
   const handleDifficultyChange = useCallback(
     (nextDifficulty: number | "all") => {
@@ -2023,7 +2232,7 @@ function App() {
           ? new Alg(liveSessionStartAlg).invert().toString()
           : "";
       setSessionAwareSetupAlg(
-        simplifyAlgText(joinAlgs([normalizeToSolved, setupAlgForOrientation])),
+        simplifyAlgText(joinAlgs([normalizeToSolved, targetSetupAlgForOrientation])),
       );
     };
 
@@ -2040,7 +2249,7 @@ function App() {
         }
         setSessionAwareSetupAlg(
           simplifyAlgText(
-            joinAlgs([stripCubeRotations(solveToSolved.toString()), setupAlgForOrientation]),
+            joinAlgs([stripCubeRotations(solveToSolved.toString()), targetSetupAlgForOrientation]),
           ),
         );
       })
@@ -2057,7 +2266,7 @@ function App() {
   }, [
     cubeKpuzzle,
     liveSessionStartAlg,
-    setupAlgForOrientation,
+    targetSetupAlgForOrientation,
     smartCubeConnected,
     trainingSessionId,
   ]);
@@ -2091,9 +2300,24 @@ function App() {
       setLiveSessionMoveCount(0);
       setMovesAfterSetup(0);
       setAttemptFinished(false);
+      setFreeStepMarks({ crossMs: null, f2lMs: null, ollMs: null });
+      freeSolveLoggedRef.current = false;
+      if (isFreeMode) {
+        if (freeInspectionEnabled) {
+          setFreeInspectionRemainingMs(FREE_INSPECTION_MS);
+          setFreeInspectionRunning(true);
+        } else {
+          setFreeInspectionRemainingMs(null);
+          setFreeInspectionRunning(false);
+        }
+      }
+    }
+    if (!setupGuideComplete) {
+      setFreeInspectionRunning(false);
+      setFreeInspectionRemainingMs(null);
     }
     prevSetupGuideCompleteRef.current = setupGuideComplete;
-  }, [setupGuideComplete]);
+  }, [freeInspectionEnabled, isFreeMode, setupGuideComplete]);
 
   useEffect(() => {
     if (
@@ -2123,16 +2347,61 @@ function App() {
   }, [smartCubeConnected, setupGuideComplete, timerRunning, attemptFinished, movesAfterSetup]);
 
   useEffect(() => {
+    if (!isFreeMode || !freeInspectionRunning || freeInspectionRemainingMs === null) {
+      return;
+    }
+    const interval = window.setInterval(() => {
+      setFreeInspectionRemainingMs((current) => {
+        if (current === null) {
+          return null;
+        }
+        const next = current - 20;
+        if (next <= 0) {
+          setFreeInspectionRunning(false);
+          return 0;
+        }
+        return next;
+      });
+    }, 20);
+    return () => {
+      window.clearInterval(interval);
+    };
+  }, [freeInspectionRemainingMs, freeInspectionRunning, isFreeMode]);
+
+  useEffect(() => {
+    if (!isFreeMode || !setupGuideComplete || movesAfterSetup > 0 || timerRunning || attemptFinished) {
+      return;
+    }
+    if (!freeInspectionEnabled) {
+      setFreeInspectionRunning(false);
+      setFreeInspectionRemainingMs(null);
+      return;
+    }
+    if (!freeInspectionRunning) {
+      setFreeInspectionRemainingMs(FREE_INSPECTION_MS);
+      setFreeInspectionRunning(true);
+    }
+  }, [
+    attemptFinished,
+    freeInspectionEnabled,
+    freeInspectionRunning,
+    isFreeMode,
+    movesAfterSetup,
+    setupGuideComplete,
+    timerRunning,
+  ]);
+
+  useEffect(() => {
     const wasFinished = prevAttemptFinishedRef.current;
     const justFinished = !wasFinished && attemptFinished;
     prevAttemptFinishedRef.current = attemptFinished;
-    if (!justFinished || !smartCubeConnected) {
+    if (!justFinished || !smartCubeConnected || isFreeMode) {
       return;
     }
     // As soon as a case is solved, recompute setup from current physical state
     // so the same selected case can be drilled repeatedly.
     resetTrainingSessionFromCurrentState();
-  }, [attemptFinished, resetTrainingSessionFromCurrentState, smartCubeConnected]);
+  }, [attemptFinished, isFreeMode, resetTrainingSessionFromCurrentState, smartCubeConnected]);
 
   useEffect(() => {
     if (!timerRunning || timerStartAt === null) {
@@ -2147,11 +2416,58 @@ function App() {
   }, [timerRunning, timerStartAt]);
 
   useEffect(() => {
+    if (!isFreeMode || !timerRunning || !currentLivePattern || !solvedPattern || timerStartAt === null) {
+      return;
+    }
+    const elapsed = performance.now() - timerStartAt;
+    setFreeStepMarks((current) => {
+      const next = { ...current };
+      let changed = false;
+      if (
+        next.crossMs === null &&
+        isCrossSolved(
+          currentLivePattern as unknown as { patternData: Record<string, any> },
+          solvedPattern as unknown as { patternData: Record<string, any> },
+        )
+      ) {
+        next.crossMs = elapsed;
+        changed = true;
+      }
+      if (
+        next.f2lMs === null &&
+        isF2LSolved(
+          currentLivePattern as unknown as { patternData: Record<string, any> },
+          solvedPattern as unknown as { patternData: Record<string, any> },
+        )
+      ) {
+        next.f2lMs = elapsed;
+        changed = true;
+      }
+      if (
+        next.ollMs === null &&
+        isOllSolved(
+          currentLivePattern as unknown as { patternData: Record<string, any> },
+          solvedPattern as unknown as { patternData: Record<string, any> },
+        )
+      ) {
+        next.ollMs = elapsed;
+        changed = true;
+      }
+      return changed ? next : current;
+    });
+  }, [currentLivePattern, isFreeMode, solvedPattern, timerRunning, timerStartAt]);
+
+  useEffect(() => {
     if (!timerRunning || !currentLivePattern || !solvedTargetPattern) {
       return;
     }
     const exactMatch = currentLivePattern.isIdentical(solvedTargetPattern);
+    const freeModeGoalMatch =
+      isFreeMode &&
+      solvedPattern &&
+      currentLivePattern.isIdentical(solvedPattern);
     const crossGoalMatch =
+      !isFreeMode &&
       stage === "cross" &&
       solvedPattern &&
       isCrossSolved(
@@ -2159,6 +2475,7 @@ function App() {
         solvedPattern as unknown as { patternData: Record<string, any> },
       );
     const f2lGoalMatch =
+      !isFreeMode &&
       stage === "f2l" &&
       solvedPattern &&
       isF2LSolved(
@@ -2166,6 +2483,7 @@ function App() {
         solvedPattern as unknown as { patternData: Record<string, any> },
       );
     const ollGoalMatch =
+      !isFreeMode &&
       stage === "oll" &&
       solvedPattern &&
       isOllSolved(
@@ -2173,10 +2491,12 @@ function App() {
         solvedPattern as unknown as { patternData: Record<string, any> },
       );
     const pllGoalMatch =
+      !isFreeMode &&
       stage === "pll" &&
       solvedPattern &&
       currentLivePattern.isIdentical(solvedPattern);
     const stageGoalMatch =
+      !isFreeMode &&
       stage !== "cross" &&
       requiredSolvedSlots.length > 0 &&
       solvedPattern &&
@@ -2185,18 +2505,43 @@ function App() {
         solvedPattern as unknown as { patternData: Record<string, any> },
         requiredSolvedSlots,
       );
-    if (exactMatch || crossGoalMatch || f2lGoalMatch || ollGoalMatch || pllGoalMatch || stageGoalMatch) {
+    if (
+      freeModeGoalMatch ||
+      (!isFreeMode &&
+        (exactMatch || crossGoalMatch || f2lGoalMatch || ollGoalMatch || pllGoalMatch || stageGoalMatch))
+    ) {
+      const totalMs = timerStartAt !== null ? performance.now() - timerStartAt : timerElapsedMs;
+      if (isFreeMode && !freeSolveLoggedRef.current) {
+        const crossAt = freeStepMarks.crossMs ?? totalMs;
+        const f2lAt = freeStepMarks.f2lMs ?? totalMs;
+        const ollAt = freeStepMarks.ollMs ?? totalMs;
+        setFreeLastSolves((current) => [
+          {
+            totalMs,
+            crossMs: crossAt,
+            f2lMs: Math.max(0, f2lAt - crossAt),
+            ollMs: Math.max(0, ollAt - f2lAt),
+            pllMs: Math.max(0, totalMs - ollAt),
+            finishedAt: Date.now(),
+          },
+          ...current,
+        ].slice(0, 5));
+        freeSolveLoggedRef.current = true;
+      }
       setTimerRunning(false);
       setAttemptFinished(true);
-      if (timerStartAt !== null) {
-        setTimerElapsedMs(performance.now() - timerStartAt);
-      }
+      setTimerElapsedMs(totalMs);
     }
   }, [
+    freeStepMarks.crossMs,
+    freeStepMarks.f2lMs,
+    freeStepMarks.ollMs,
+    isFreeMode,
     timerRunning,
     currentLivePattern,
     solvedTargetPattern,
     stage,
+    timerElapsedMs,
     timerStartAt,
     requiredSolvedSlots,
     solvedPattern,
@@ -2240,10 +2585,16 @@ function App() {
       </header>
 
       <nav className="stage-tabs" aria-label="CFOP stages">
+        <button
+          className={isFreeMode ? "active" : ""}
+          onClick={handleFreeMode}
+        >
+          Free
+        </button>
         {stages.map((item) => (
           <button
             key={item}
-            className={stage === item ? "active" : ""}
+            className={!isFreeMode && stage === item ? "active" : ""}
             onClick={() => handleStageChange(item)}
           >
             {stageMeta[item].title}
@@ -2255,12 +2606,16 @@ function App() {
         <aside className="control-panel">
           <div className="section-heading">
             <div>
-              <p className="eyebrow">{stageMeta[stage].caseLabel}</p>
-              <h2>{stageMeta[stage].title}</h2>
+              <p className="eyebrow">{isFreeMode ? "Solve Trainer" : stageMeta[stage].caseLabel}</p>
+              <h2>{isFreeMode ? "Free Practice" : stageMeta[stage].title}</h2>
             </div>
             <BookOpen size={20} />
           </div>
-          <p className="muted">{stageMeta[stage].subtitle}</p>
+          <p className="muted">
+            {isFreeMode
+              ? "Drill full solves with inspection, split timing, and rolling history."
+              : stageMeta[stage].subtitle}
+          </p>
 
           <label className="field-label" htmlFor="cube-orientation">
             Cube orientation
@@ -2280,62 +2635,95 @@ function App() {
             </button>
           </div>
 
-          <label className="field-label" htmlFor="difficulty">
-            Difficulty
-          </label>
-          <div className="segmented" id="difficulty">
-            {stage !== "cross" && (
-              <button
-                className={difficulty === "all" ? "active" : ""}
-                onClick={() => handleDifficultyChange("all")}
-              >
-                All
-              </button>
-            )}
-            {availableDifficulties.map((level) => (
-              <button
-                key={level}
-                className={difficulty === level ? "active" : ""}
-                onClick={() => handleDifficultyChange(level)}
-              >
-                {stage === "cross" ? `${level}` : `L${level}`}
-              </button>
-            ))}
-          </div>
-
-          {stage !== "cross" && (
+          {isFreeMode ? (
             <>
-              <label className="field-label" htmlFor="case-select">
-                Case
+              <label className="field-label" htmlFor="inspection-enabled">
+                Inspection
               </label>
-              <select
-                id="case-select"
-                value={activeCase.id}
-                onChange={(event) => handleCaseChange(event.target.value)}
-              >
-                {filteredCases.map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {item.name}
-                  </option>
+              <div className="segmented" id="inspection-enabled">
+                <button
+                  className={freeInspectionEnabled ? "active" : ""}
+                  onClick={() => setFreeInspectionEnabled(true)}
+                >
+                  15s
+                </button>
+                <button
+                  className={!freeInspectionEnabled ? "active" : ""}
+                  onClick={() => setFreeInspectionEnabled(false)}
+                >
+                  Unlimited
+                </button>
+              </div>
+              <div className="action-row">
+                <button
+                  className="primary-button"
+                  onClick={handleNewFreeScramble}
+                >
+                  <Shuffle size={18} />
+                  New scramble
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <label className="field-label" htmlFor="difficulty">
+                Difficulty
+              </label>
+              <div className="segmented" id="difficulty">
+                {stage !== "cross" && (
+                  <button
+                    className={difficulty === "all" ? "active" : ""}
+                    onClick={() => handleDifficultyChange("all")}
+                  >
+                    All
+                  </button>
+                )}
+                {availableDifficulties.map((level) => (
+                  <button
+                    key={level}
+                    className={difficulty === level ? "active" : ""}
+                    onClick={() => handleDifficultyChange(level)}
+                  >
+                    {stage === "cross" ? `${level}` : `L${level}`}
+                  </button>
                 ))}
-              </select>
+              </div>
+
+              {stage !== "cross" && (
+                <>
+                  <label className="field-label" htmlFor="case-select">
+                    Case
+                  </label>
+                  <select
+                    id="case-select"
+                    value={activeCase.id}
+                    onChange={(event) => handleCaseChange(event.target.value)}
+                  >
+                    {filteredCases.map((item) => (
+                      <option key={item.id} value={item.id}>
+                        {item.name}
+                      </option>
+                    ))}
+                  </select>
+                </>
+              )}
+
+              <div className="action-row">
+                <button
+                  className="primary-button"
+                  onClick={randomTrainingCase}
+                  disabled={stage === "cross" && crossGenerated.loading}
+                >
+                  <Shuffle size={18} />
+                  {stage === "cross"
+                    ? crossGenerated.loading
+                      ? "Generating"
+                      : "New cross case"
+                    : "Random case"}
+                </button>
+              </div>
             </>
           )}
-
-          <div className="action-row">
-            <button
-              className="primary-button"
-              onClick={randomTrainingCase}
-              disabled={stage === "cross" && crossGenerated.loading}
-            >
-              <Shuffle size={18} />
-              {stage === "cross"
-                ? crossGenerated.loading
-                  ? "Generating"
-                  : "New cross case"
-                : "Random case"}
-            </button>
-          </div>
         </aside>
 
         <div className="main-column">
@@ -2353,10 +2741,21 @@ function App() {
             gyroQuaternion={isLiveViewer ? smartCubeGyro : null}
             gyroSession={smartCubeGyroSession}
           />
-          <AlgorithmCard
-            activeCase={activeCaseWithTrainingSetup}
-            cubeOrientation={cubeOrientation}
-          />
+          {isFreeMode ? (
+            <FreePracticePanel
+              scramble={freeScrambleForOrientation}
+              inspectionEnabled={freeInspectionEnabled}
+              inspectionRunning={freeInspectionRunning}
+              inspectionRemainingMs={freeInspectionRemainingMs}
+              timerLabel={formatMs(timerElapsedMs)}
+              stepMarks={freeStepMarks}
+            />
+          ) : (
+            <AlgorithmCard
+              activeCase={activeCaseWithTrainingSetup}
+              cubeOrientation={cubeOrientation}
+            />
+          )}
         </div>
 
         <SmartCubePanel
@@ -2366,6 +2765,7 @@ function App() {
           onConnectionChange={handleSmartCubeConnectionChange}
           onResetLiveState={handleSmartCubeResetLiveState}
           cubeOrientation={cubeOrientation}
+          freeLastSolves={freeLastSolves}
         />
       </section>
     </main>

@@ -141,9 +141,31 @@ button {
   gap: 8px;
 }
 
+.timer-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 38px;
+  min-width: 98px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 10px;
+  background: var(--color-surface-subtle);
+  padding: 6px 12px;
+  color: var(--color-text-strong);
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 1.08rem;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.timer-chip.running {
+  border-color: var(--color-running);
+  color: var(--color-running);
+}
+
 .stage-tabs {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 6px;
   margin: 0;
   padding: 4px;
@@ -395,15 +417,6 @@ code {
   text-transform: uppercase;
 }
 
-.live-guide-head b {
-  color: var(--color-primary);
-  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-}
-
-.live-guide-head b.running {
-  color: var(--color-running);
-}
-
 .live-guide-steps {
   display: flex;
   flex-wrap: wrap;
@@ -561,6 +574,15 @@ code {
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
 }
 
+.smart-best-panel {
+  margin-top: 12px;
+}
+
+.smart-best-panel p {
+  margin: 4px 0 0;
+  font-size: 0.82rem;
+}
+
 .theme-toggle {
   display: inline-flex;
   align-items: center;
@@ -644,7 +666,7 @@ code {
   }
 
   .stage-tabs {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(5, minmax(0, 1fr));
     gap: 4px;
   }
 
