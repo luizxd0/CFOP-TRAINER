@@ -19,7 +19,7 @@ import { Alg, Move } from "cubing/alg";
 import { KPattern } from "cubing/kpuzzle";
 import { experimentalSolve3x3x3IgnoringCenters } from "cubing/search";
 import { cube3x3x3 } from "cubing/puzzles";
-import { TwistyPlayer } from "cubing/twisty";
+import { TwistyPlayer, setTwistyDebug } from "cubing/twisty";
 import {
   connectSmartCube as connectAnySmartCube,
   type SmartCubeConnection,
@@ -35,14 +35,45 @@ import {
   stages,
 } from "./lib/trainer";
 import { generateExactCrossCase } from "./lib/crossTrainer";
-import { stageMeta, type AlgorithmCase, type Stage } from "./data/cfopData";
+import {
+  allCases,
+  stageMeta,
+  type AlgorithmCase,
+  type LearningSubset,
+  type Stage,
+} from "./data/cfopData";
 import "./styles.css";
 
 type CubeOrientation = "yellow-top" | "white-top";
 type CubeSkin = "classic" | "f2l";
 type ThemeMode = "light" | "dark";
 type AppMode = "trainer" | "free";
-type AppView = "home" | "training" | "dashboard";
+type AppView = "home" | "training" | "dashboard" | "learn";
+type LearnStage = "f2l" | "oll" | "pll";
+type LearningProgressState = "unknown" | "learning" | "learned";
+type LearningProgressFilter = "all" | LearningProgressState;
+type LearningSubsetFilter = "all" | LearningSubset;
+type CustomAlgorithm = {
+  id: string;
+  alg: string;
+  label: string;
+  notes?: string;
+};
+type PracticeTimingStats = {
+  attempts: number;
+  bestMs?: number;
+  averageMs?: number;
+  lastMs?: number;
+  lastPracticedAt?: number;
+};
+type LearningCaseRecord = {
+  state: LearningProgressState;
+  customAlgorithms: CustomAlgorithm[];
+  primaryAlgorithmId?: string;
+  selectedForPractice?: boolean;
+  practiceStats?: PracticeTimingStats;
+};
+type LearningData = Record<string, LearningCaseRecord>;
 type GyroQuaternion = { x: number; y: number; z: number; w: number };
 type CubeKpuzzle = Awaited<ReturnType<typeof cube3x3x3.kpuzzle>>;
 type FreeSolveRecord = {
@@ -70,6 +101,10 @@ const F2L_STICKERING_MASK_BY_ORIENTATION: Record<CubeOrientation, string> = {
   "yellow-top": "EDGES:----IIII----,CORNERS:----IIII,CENTERS:-----I",
 };
 
+if (typeof window !== "undefined") {
+  setTwistyDebug({ shareAllNewRenderers: "always" });
+}
+
 function initialThemeMode(): ThemeMode {
   if (typeof window === "undefined") {
     return "dark";
@@ -79,6 +114,127 @@ function initialThemeMode(): ThemeMode {
     return stored;
   }
   return "dark";
+}
+
+function normalizeLearningRecord(value: unknown): LearningCaseRecord {
+  const raw = value && typeof value === "object" ? value as Partial<LearningCaseRecord> : {};
+  const state: LearningProgressState =
+    raw.state === "learning" || raw.state === "learned" ? raw.state : "unknown";
+  const rawStats = raw.practiceStats;
+  const practiceStats =
+    rawStats && typeof rawStats === "object" && typeof rawStats.attempts === "number"
+      ? {
+          attempts: Math.max(0, rawStats.attempts),
+          bestMs: typeof rawStats.bestMs === "number" ? rawStats.bestMs : undefined,
+          averageMs: typeof rawStats.averageMs === "number" ? rawStats.averageMs : undefined,
+          lastMs: typeof rawStats.lastMs === "number" ? rawStats.lastMs : undefined,
+          lastPracticedAt:
+            typeof rawStats.lastPracticedAt === "number" ? rawStats.lastPracticedAt : undefined,
+        }
+      : undefined;
+  const customAlgorithms = Array.isArray(raw.customAlgorithms)
+    ? raw.customAlgorithms
+        .filter((item): item is CustomAlgorithm =>
+          Boolean(
+            item &&
+              typeof item === "object" &&
+              typeof (item as CustomAlgorithm).id === "string" &&
+              typeof (item as CustomAlgorithm).alg === "string",
+          ),
+        )
+        .map((item) => ({
+          id: item.id,
+          alg: item.alg.trim(),
+          label: item.label?.trim() || "Custom",
+          notes: item.notes?.trim() || undefined,
+        }))
+        .filter((item) => item.alg.length > 0)
+    : [];
+  const primaryAlgorithmId =
+    typeof raw.primaryAlgorithmId === "string" ? raw.primaryAlgorithmId : undefined;
+  return {
+    state,
+    customAlgorithms,
+    primaryAlgorithmId,
+    selectedForPractice: raw.selectedForPractice === true,
+    practiceStats,
+  };
+}
+
+function initialLearningData(): LearningData {
+  if (typeof window === "undefined") {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(LEARNING_STORAGE_KEY) ?? "{}");
+    if (!parsed || typeof parsed !== "object") {
+      return {};
+    }
+    return Object.fromEntries(
+      Object.entries(parsed).map(([caseId, record]) => [caseId, normalizeLearningRecord(record)]),
+    );
+  } catch {
+    return {};
+  }
+}
+
+function nextLearningState(state: LearningProgressState): LearningProgressState {
+  if (state === "unknown") return "learning";
+  if (state === "learning") return "learned";
+  return "unknown";
+}
+
+function recordForCase(data: LearningData, caseId: string): LearningCaseRecord {
+  return data[caseId] ?? { state: "unknown", customAlgorithms: [] };
+}
+
+function timingScore(record: LearningCaseRecord): number {
+  const stats = record.practiceStats;
+  if (!stats || stats.attempts === 0) {
+    return Number.POSITIVE_INFINITY;
+  }
+  return stats.averageMs ?? stats.lastMs ?? 0;
+}
+
+function timingStatsLabel(record: LearningCaseRecord): string {
+  const stats = record.practiceStats;
+  if (!stats || stats.attempts === 0) {
+    return "No timings yet";
+  }
+  const average = stats.averageMs !== undefined ? formatMs(stats.averageMs) : "--";
+  const best = stats.bestMs !== undefined ? formatMs(stats.bestMs) : "--";
+  return `${stats.attempts} tries | avg ${average} | best ${best}`;
+}
+
+function mergeCaseWithLearning(activeCase: AlgorithmCase, record: LearningCaseRecord): AlgorithmCase {
+  const customPrimary = record.customAlgorithms.find(
+    (item) => item.id === record.primaryAlgorithmId,
+  );
+  if (!customPrimary) {
+    return activeCase;
+  }
+  return {
+    ...activeCase,
+    solutions: [
+      {
+        alg: customPrimary.alg,
+        label: customPrimary.label,
+        source: "Custom algorithm",
+        notes: customPrimary.notes ?? "Stored locally for this browser.",
+      },
+      ...activeCase.solutions,
+    ],
+  };
+}
+
+function learningStats(cases: AlgorithmCase[], data: LearningData) {
+  return cases.reduce(
+    (acc, item) => {
+      acc[recordForCase(data, item.id).state] += 1;
+      return acc;
+    },
+    { unknown: 0, learning: 0, learned: 0 } satisfies Record<LearningProgressState, number>,
+  );
 }
 
 function orientationPrefix(orientation: CubeOrientation): string {
@@ -190,6 +346,7 @@ const F2L_CORNER_SLOTS = [4, 5, 6, 7] as const;
 const CROSS_RECENT_VARIETY_WINDOW = 24;
 const CROSS_MAX_UNIQUE_ATTEMPTS = 14;
 const FREE_INSPECTION_MS = 15_000;
+const LEARNING_STORAGE_KEY = "cfopLearningProgress:v1";
 
 function splitAlgTokens(alg: string): string[] {
   return alg
@@ -1020,6 +1177,251 @@ function CubeViewer({
   );
 }
 
+type CasePreviewRequest = {
+  key: string;
+  setup: string;
+  compact: boolean;
+};
+
+const casePreviewCache = new Map<string, string>();
+const casePreviewPending = new Map<string, Promise<string>>();
+const casePreviewSubscribers = new Map<string, Set<() => void>>();
+const casePreviewQueue: Array<() => Promise<void>> = [];
+let casePreviewQueueRunning = false;
+let casePreviewBackend: { host: HTMLDivElement; player: TwistyPlayer } | null = null;
+
+function getCasePreview(key: string): string | undefined {
+  return casePreviewCache.get(key);
+}
+
+function subscribeCasePreview(key: string, listener: () => void): () => void {
+  const listeners = casePreviewSubscribers.get(key) ?? new Set<() => void>();
+  listeners.add(listener);
+  casePreviewSubscribers.set(key, listeners);
+  return () => {
+    const current = casePreviewSubscribers.get(key);
+    if (!current) return;
+    current.delete(listener);
+    if (current.size === 0) {
+      casePreviewSubscribers.delete(key);
+    }
+  };
+}
+
+function notifyCasePreview(key: string) {
+  const listeners = casePreviewSubscribers.get(key);
+  if (!listeners) return;
+  for (const listener of listeners) {
+    listener();
+  }
+}
+
+function nextFrame(): Promise<void> {
+  return new Promise((resolve) => requestAnimationFrame(() => resolve()));
+}
+
+function nextTask(): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, 0));
+}
+
+async function awaitTwistyIntersectedCallback(player: TwistyPlayer): Promise<void> {
+  let callback: ((this: TwistyPlayer) => Promise<void>) | undefined;
+  for (let proto: object | null = Object.getPrototypeOf(player); proto && !callback; proto = Object.getPrototypeOf(proto)) {
+    const symbol = Object.getOwnPropertySymbols(proto).find(
+      (item) => item.description === "intersectedCallback",
+    );
+    const candidate = symbol ? (proto as Record<symbol, unknown>)[symbol] : undefined;
+    if (typeof candidate === "function") {
+      callback = candidate as (this: TwistyPlayer) => Promise<void>;
+    }
+  }
+  if (callback) {
+    await callback.call(player);
+  }
+}
+
+function ensureCasePreviewBackend(): { host: HTMLDivElement; player: TwistyPlayer } {
+  if (casePreviewBackend) {
+    return casePreviewBackend;
+  }
+  const host = document.createElement("div");
+  host.setAttribute("aria-hidden", "true");
+  host.style.position = "fixed";
+  host.style.left = "0";
+  host.style.top = "0";
+  host.style.width = "260px";
+  host.style.height = "260px";
+  host.style.opacity = "0";
+  host.style.pointerEvents = "none";
+  host.style.zIndex = "-1";
+  host.style.overflow = "hidden";
+  document.body.appendChild(host);
+
+  const player = new TwistyPlayer({
+    puzzle: "3x3x3",
+    experimentalSetupAlg: "",
+    alg: "",
+    background: "none",
+    controlPanel: "none",
+    backView: "none",
+    viewerLink: "none",
+    visualization: "3D",
+    experimentalStickering: "full",
+    experimentalStickeringMaskOrbits: FULL_STICKERING_MASK,
+    hintFacelets: "none",
+    experimentalDragInput: "none",
+    experimentalFaceletScale: 0.92,
+    experimentalInitialHintFaceletsAnimation: "none",
+    cameraLatitude: 28,
+    cameraLongitude: 32,
+    cameraDistance: 5.85,
+  });
+  player.style.width = "260px";
+  player.style.height = "260px";
+  host.appendChild(player);
+  casePreviewBackend = { host, player };
+  return casePreviewBackend;
+}
+
+async function renderCasePreview(request: CasePreviewRequest): Promise<string> {
+  const { player } = ensureCasePreviewBackend();
+  await awaitTwistyIntersectedCallback(player);
+  player.experimentalSetupAlg = request.setup;
+  player.alg = "";
+  player.experimentalFaceletScale = request.compact ? 0.88 : 0.92;
+  player.cameraDistance = request.compact ? 6.6 : 5.85;
+  player.jumpToStart({ flash: false });
+  await nextTask();
+  await nextFrame();
+  await nextFrame();
+  return player.experimentalScreenshot({ width: 512, height: 512 });
+}
+
+function enqueueCasePreview(job: () => Promise<void>) {
+  casePreviewQueue.push(job);
+  void drainCasePreviewQueue();
+}
+
+async function drainCasePreviewQueue() {
+  if (casePreviewQueueRunning) return;
+  casePreviewQueueRunning = true;
+  try {
+    while (casePreviewQueue.length > 0) {
+      const job = casePreviewQueue.shift();
+      if (job) {
+        await job();
+      }
+    }
+  } finally {
+    casePreviewQueueRunning = false;
+  }
+}
+
+function requestCasePreview(request: CasePreviewRequest): Promise<string> {
+  const cached = casePreviewCache.get(request.key);
+  if (cached) {
+    return Promise.resolve(cached);
+  }
+  const pending = casePreviewPending.get(request.key);
+  if (pending) {
+    return pending;
+  }
+  const promise = new Promise<string>((resolve) => {
+    enqueueCasePreview(async () => {
+      try {
+        const src = await renderCasePreview(request);
+        if (src) {
+          casePreviewCache.set(request.key, src);
+        }
+        resolve(src);
+      } catch {
+        resolve("");
+      } finally {
+        casePreviewPending.delete(request.key);
+        notifyCasePreview(request.key);
+      }
+    });
+  });
+  casePreviewPending.set(request.key, promise);
+  return promise;
+}
+
+function CasePreview({
+  activeCase,
+  cubeOrientation,
+  compact = false,
+}: {
+  activeCase: AlgorithmCase;
+  cubeOrientation: CubeOrientation;
+  compact?: boolean;
+}) {
+  const hostRef = useRef<HTMLDivElement | null>(null);
+  const setup = joinAlgs([
+    orientationPrefix(cubeOrientation),
+    activeCase.diagramSetup ?? activeCase.baseSetup,
+  ]);
+  const previewKey = `${setup}|${compact ? "compact" : "detail"}`;
+  const [previewSrc, setPreviewSrc] = useState(() => getCasePreview(previewKey));
+  const [visible, setVisible] = useState(false);
+
+  useEffect(() => {
+    setPreviewSrc(getCasePreview(previewKey));
+  }, [previewKey]);
+
+  useEffect(() => {
+    const element = hostRef.current;
+    if (!element) {
+      return;
+    }
+    if (!("IntersectionObserver" in window)) {
+      setVisible(true);
+      return;
+    }
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry?.isIntersecting) {
+          setVisible(true);
+          observer.disconnect();
+        }
+      },
+      { rootMargin: "220px 0px" },
+    );
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    if (!visible || previewSrc) {
+      return;
+    }
+    let cancelled = false;
+    const unsubscribe = subscribeCasePreview(previewKey, () => {
+      if (!cancelled) {
+        setPreviewSrc(getCasePreview(previewKey));
+      }
+    });
+    void requestCasePreview({ key: previewKey, setup, compact }).then((src) => {
+      if (!cancelled) {
+        setPreviewSrc(src);
+      }
+    });
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [compact, previewKey, previewSrc, setup, visible]);
+
+  return (
+    <div className={compact ? "case-preview compact" : "case-preview"} ref={hostRef}>
+      {previewSrc ? (
+        <img src={previewSrc} alt={`${activeCase.name} preview`} />
+      ) : (
+        <span>Loading preview...</span>
+      )}
+    </div>
+  );
+}
+
 function SmartCubePanel({
   onMove,
   onGyro,
@@ -1692,6 +2094,18 @@ function App() {
   const [view, setView] = useState<AppView>("training");
   const [mode, setMode] = useState<AppMode>("trainer");
   const [stage, setStage] = useState<Stage>("cross");
+  const [learnStage, setLearnStage] = useState<LearnStage>("oll");
+  const [learnSubset, setLearnSubset] = useState<LearningSubsetFilter>("all");
+  const [learnProgressFilter, setLearnProgressFilter] =
+    useState<LearningProgressFilter>("all");
+  const [learnSearch, setLearnSearch] = useState("");
+  const [selectedLearnCaseId, setSelectedLearnCaseId] = useState("oll-01");
+  const [learningData, setLearningData] = useState<LearningData>(initialLearningData);
+  const [customAlgDraft, setCustomAlgDraft] = useState("");
+  const [customAlgLabelDraft, setCustomAlgLabelDraft] = useState("Custom");
+  const [editingCustomAlgId, setEditingCustomAlgId] = useState<string | null>(null);
+  const [trainingSubsetFilter, setTrainingSubsetFilter] =
+    useState<LearningSubsetFilter>("all");
   const [cubeOrientation, setCubeOrientation] =
     useState<CubeOrientation>("yellow-top");
   const [cubeSkin, setCubeSkin] = useState<CubeSkin>("classic");
@@ -1735,6 +2149,7 @@ function App() {
   const pendingFaceletsBootstrapRef = useRef(false);
   const pendingFaceletsValueRef = useRef<string | null>(null);
   const bootstrappingFaceletsRef = useRef(false);
+  const queuedPracticeCaseIdRef = useRef<string | null>(null);
   const [difficulty, setDifficulty] = useState<number | "all">(1);
   const [selectedCaseId, setSelectedCaseId] = useState("cross-1");
   const [showPanelSolution, setShowPanelSolution] = useState(false);
@@ -1768,6 +2183,12 @@ function App() {
       setMirrorHintsEnabled(false);
     }
   }, [cubeSkin, mirrorHintsEnabled]);
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(LEARNING_STORAGE_KEY, JSON.stringify(learningData));
+    }
+  }, [learningData]);
 
   useEffect(() => {
     smartCubeMovesRef.current = smartCubeMoves;
@@ -1840,7 +2261,17 @@ function App() {
   }, [shouldKeepScreenAwake]);
 
   const isFreeMode = mode === "free";
-  const stageCases = useMemo(() => casesForStage(stage), [stage]);
+  const stageCases = useMemo(
+    () =>
+      casesForStage(stage)
+        .filter((item) =>
+          trainingSubsetFilter === "all"
+            ? true
+            : item.subsets?.includes(trainingSubsetFilter),
+        )
+        .map((item) => mergeCaseWithLearning(item, recordForCase(learningData, item.id))),
+    [learningData, stage, trainingSubsetFilter],
+  );
   const availableDifficulties = useMemo(
     () => [...new Set(stageCases.map((item) => item.difficulty))].sort((a, b) => a - b),
     [stageCases],
@@ -1856,6 +2287,85 @@ function App() {
     filteredCases.find((item) => item.id === selectedCaseId) ??
     filteredCases[0] ??
     stageCases[0];
+  const learnCases = useMemo(
+    () =>
+      allCases
+        .filter((item) => item.stage === learnStage)
+        .filter((item) =>
+          learnSubset === "all" ? true : item.subsets?.includes(learnSubset),
+        )
+        .filter((item) => {
+          const state = recordForCase(learningData, item.id).state;
+          return learnProgressFilter === "all" || state === learnProgressFilter;
+        })
+        .filter((item) => {
+          const query = learnSearch.trim().toLowerCase();
+          if (!query) return true;
+          return [
+            item.name,
+            item.group,
+            item.recognition,
+            ...(item.recognitionTags ?? []),
+            ...item.solutions.map((solutionItem) => solutionItem.alg),
+          ]
+            .join(" ")
+            .toLowerCase()
+            .includes(query);
+        })
+        .map((item) => mergeCaseWithLearning(item, recordForCase(learningData, item.id))),
+    [learnProgressFilter, learnSearch, learnStage, learnSubset, learningData],
+  );
+  const selectedLearnCase = useMemo(
+    () =>
+      learnCases.find((item) => item.id === selectedLearnCaseId) ??
+      learnCases[0] ??
+      mergeCaseWithLearning(
+        allCases.find((item) => item.stage === learnStage) ?? allCases[0]!,
+        recordForCase(learningData, selectedLearnCaseId),
+      ),
+    [learnCases, learnStage, learningData, selectedLearnCaseId],
+  );
+  const selectedLearnRecord = recordForCase(learningData, selectedLearnCase.id);
+  const allLearnableCases = useMemo(
+    () => allCases.filter((item) => item.stage === "f2l" || item.stage === "oll" || item.stage === "pll"),
+    [],
+  );
+  const selectedPracticeCases = useMemo(
+    () =>
+      allLearnableCases
+        .filter((item) => recordForCase(learningData, item.id).selectedForPractice)
+        .map((item) => mergeCaseWithLearning(item, recordForCase(learningData, item.id))),
+    [allLearnableCases, learningData],
+  );
+  const weakestPracticeCase = useMemo(() => {
+    if (selectedPracticeCases.length === 0) {
+      return null;
+    }
+    const ranked = [...selectedPracticeCases].sort(
+      (a, b) => timingScore(recordForCase(learningData, b.id)) - timingScore(recordForCase(learningData, a.id)),
+    );
+    const weakestBand = ranked.slice(0, Math.min(3, ranked.length));
+    return weakestBand[Math.floor(Math.random() * weakestBand.length)] ?? ranked[0];
+  }, [learningData, selectedPracticeCases]);
+  const progressTotals = useMemo(
+    () => learningStats(allLearnableCases, learningData),
+    [allLearnableCases, learningData],
+  );
+  const subsetOptions = useMemo(() => {
+    if (stage === "oll") {
+      return [
+        { id: "all" as const, label: "All OLL" },
+        { id: "2look-oll" as const, label: "2-look" },
+      ];
+    }
+    if (stage === "pll") {
+      return [
+        { id: "all" as const, label: "All PLL" },
+        { id: "2look-pll" as const, label: "2-look" },
+      ];
+    }
+    return [{ id: "all" as const, label: "All" }];
+  }, [stage]);
   const isCross = stage === "cross";
   const crossDifficulty = difficulty === "all" ? 1 : difficulty;
 
@@ -2314,14 +2824,255 @@ function App() {
     [resetTrainingSessionFromCurrentState, selectedCaseId],
   );
 
+  const updateLearningRecord = useCallback(
+    (caseId: string, updater: (record: LearningCaseRecord) => LearningCaseRecord) => {
+      setLearningData((current) => {
+        const nextRecord = updater(recordForCase(current, caseId));
+        return {
+          ...current,
+          [caseId]: {
+            ...nextRecord,
+            selectedForPractice: nextRecord.selectedForPractice === true,
+            practiceStats: nextRecord.practiceStats,
+            customAlgorithms: nextRecord.customAlgorithms.map((item) => ({
+              ...item,
+              alg: item.alg.trim(),
+              label: item.label.trim() || "Custom",
+            })),
+          },
+        };
+      });
+    },
+    [],
+  );
+
+  const cycleLearningState = useCallback(
+    (caseId: string) => {
+      updateLearningRecord(caseId, (record) => ({
+        ...record,
+        state: nextLearningState(record.state),
+      }));
+    },
+    [updateLearningRecord],
+  );
+
+  const setLearningState = useCallback(
+    (caseId: string, state: LearningProgressState) => {
+      updateLearningRecord(caseId, (record) => ({ ...record, state }));
+    },
+    [updateLearningRecord],
+  );
+
+  const saveCustomAlgorithm = useCallback(() => {
+    const alg = customAlgDraft.trim();
+    if (!alg || !selectedLearnCase) {
+      return;
+    }
+    const label = customAlgLabelDraft.trim() || "Custom";
+    updateLearningRecord(selectedLearnCase.id, (record) => {
+      const duplicate = record.customAlgorithms.some(
+        (item) => item.alg === alg && item.id !== editingCustomAlgId,
+      );
+      if (duplicate) {
+        return record;
+      }
+      if (editingCustomAlgId) {
+        return {
+          ...record,
+          customAlgorithms: record.customAlgorithms.map((item) =>
+            item.id === editingCustomAlgId ? { ...item, alg, label } : item,
+          ),
+        };
+      }
+      const id = `custom-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+      return {
+        ...record,
+        customAlgorithms: [...record.customAlgorithms, { id, alg, label }],
+        primaryAlgorithmId: record.primaryAlgorithmId ?? id,
+      };
+    });
+    setCustomAlgDraft("");
+    setCustomAlgLabelDraft("Custom");
+    setEditingCustomAlgId(null);
+  }, [
+    customAlgDraft,
+    customAlgLabelDraft,
+    editingCustomAlgId,
+    selectedLearnCase,
+    updateLearningRecord,
+  ]);
+
+  const editCustomAlgorithm = useCallback((algorithm: CustomAlgorithm) => {
+    setEditingCustomAlgId(algorithm.id);
+    setCustomAlgDraft(algorithm.alg);
+    setCustomAlgLabelDraft(algorithm.label);
+  }, []);
+
+  const removeCustomAlgorithm = useCallback(
+    (caseId: string, algorithmId: string) => {
+      updateLearningRecord(caseId, (record) => {
+        const customAlgorithms = record.customAlgorithms.filter((item) => item.id !== algorithmId);
+        return {
+          ...record,
+          customAlgorithms,
+          primaryAlgorithmId:
+            record.primaryAlgorithmId === algorithmId ? undefined : record.primaryAlgorithmId,
+        };
+      });
+      if (editingCustomAlgId === algorithmId) {
+        setEditingCustomAlgId(null);
+        setCustomAlgDraft("");
+        setCustomAlgLabelDraft("Custom");
+      }
+    },
+    [editingCustomAlgId, updateLearningRecord],
+  );
+
+  const setPrimaryAlgorithm = useCallback(
+    (caseId: string, algorithmId?: string) => {
+      updateLearningRecord(caseId, (record) => ({
+        ...record,
+        primaryAlgorithmId: algorithmId,
+      }));
+    },
+    [updateLearningRecord],
+  );
+
+  const togglePracticeSelection = useCallback(
+    (caseId: string) => {
+      updateLearningRecord(caseId, (record) => ({
+        ...record,
+        selectedForPractice: !record.selectedForPractice,
+      }));
+    },
+    [updateLearningRecord],
+  );
+
+  const selectVisiblePracticeCases = useCallback(() => {
+    const visibleIds = new Set(learnCases.map((item) => item.id));
+    setLearningData((current) => {
+      const next = { ...current };
+      for (const caseId of visibleIds) {
+        next[caseId] = {
+          ...recordForCase(current, caseId),
+          selectedForPractice: true,
+        };
+      }
+      return next;
+    });
+  }, [learnCases]);
+
+  const selectOnlyLearningPracticeCases = useCallback(() => {
+    const learningIds = new Set(
+      learnCases
+        .filter((item) => recordForCase(learningData, item.id).state === "learning")
+        .map((item) => item.id),
+    );
+    setLearningData((current) => {
+      const next = { ...current };
+      for (const item of allLearnableCases) {
+        const record = recordForCase(current, item.id);
+        next[item.id] = {
+          ...record,
+          selectedForPractice: learningIds.has(item.id),
+        };
+      }
+      return next;
+    });
+  }, [allLearnableCases, learnCases, learningData]);
+
+  const clearPracticeSelection = useCallback(() => {
+    setLearningData((current) => {
+      const next = { ...current };
+      for (const item of allLearnableCases) {
+        const record = recordForCase(current, item.id);
+        if (record.selectedForPractice) {
+          next[item.id] = {
+            ...record,
+            selectedForPractice: false,
+          };
+        }
+      }
+      return next;
+    });
+  }, [allLearnableCases]);
+
+  const logPracticeTiming = useCallback(
+    (caseId: string, totalMs: number) => {
+      updateLearningRecord(caseId, (record) => {
+        const previous = record.practiceStats;
+        const attempts = (previous?.attempts ?? 0) + 1;
+        const previousAverage = previous?.averageMs ?? previous?.lastMs ?? totalMs;
+        return {
+          ...record,
+          practiceStats: {
+            attempts,
+            bestMs: previous?.bestMs === undefined ? totalMs : Math.min(previous.bestMs, totalMs),
+            averageMs:
+              previous && previous.attempts > 0
+                ? ((previousAverage * previous.attempts) + totalMs) / attempts
+                : totalMs,
+            lastMs: totalMs,
+            lastPracticedAt: Date.now(),
+          },
+        };
+      });
+    },
+    [updateLearningRecord],
+  );
+
+  const applyPracticeCase = useCallback(
+    (practiceCase: AlgorithmCase) => {
+      resetTrainingSessionFromCurrentState();
+      queuedPracticeCaseIdRef.current = practiceCase.stage === stage ? null : practiceCase.id;
+      setView("training");
+      setMode("trainer");
+      setStage(practiceCase.stage);
+      setTrainingSubsetFilter("all");
+      setDifficulty("all");
+      setSelectedCaseId(practiceCase.id);
+    },
+    [resetTrainingSessionFromCurrentState, stage],
+  );
+
+  const practiceWeakestSelectedCase = useCallback(() => {
+    if (selectedPracticeCases.length === 0) {
+      return;
+    }
+    const ranked = [...selectedPracticeCases].sort(
+      (a, b) => timingScore(recordForCase(learningData, b.id)) - timingScore(recordForCase(learningData, a.id)),
+    );
+    const weakestBand = ranked.slice(0, Math.min(3, ranked.length));
+    const next = weakestBand[Math.floor(Math.random() * weakestBand.length)] ?? ranked[0];
+    applyPracticeCase(next);
+  }, [applyPracticeCase, learningData, selectedPracticeCases]);
+
   useEffect(() => {
+    setTrainingSubsetFilter("all");
     const nextDifficulty = stage === "cross" ? 1 : "all";
     setDifficulty(nextDifficulty);
-    const nextCase = casesForStage(stage).find((item) =>
+    const queuedPracticeCaseId = queuedPracticeCaseIdRef.current;
+    const queuedCase = queuedPracticeCaseId
+      ? casesForStage(stage).find((item) => item.id === queuedPracticeCaseId)
+      : undefined;
+    queuedPracticeCaseIdRef.current = null;
+    const nextCase = queuedCase ?? casesForStage(stage).find((item) =>
       nextDifficulty === "all" ? true : item.difficulty === nextDifficulty,
     );
     setSelectedCaseId(nextCase?.id ?? casesForStage(stage)[0].id);
   }, [stage]);
+
+  useEffect(() => {
+    if (!learnCases.some((item) => item.id === selectedLearnCaseId) && learnCases[0]) {
+      setSelectedLearnCaseId(learnCases[0].id);
+    }
+  }, [learnCases, selectedLearnCaseId]);
+
+  useEffect(() => {
+    setCustomAlgDraft("");
+    setCustomAlgLabelDraft("Custom");
+    setEditingCustomAlgId(null);
+  }, [selectedLearnCase.id]);
 
   useEffect(() => {
     if (!filteredCases.some((item) => item.id === selectedCaseId)) {
@@ -2708,6 +3459,9 @@ function App() {
         (exactMatch || crossGoalMatch || f2lGoalMatch || ollGoalMatch || pllGoalMatch || stageGoalMatch))
     ) {
       const totalMs = timerStartAt !== null ? performance.now() - timerStartAt : timerElapsedMs;
+      if (!isFreeMode && activeCaseWithTrainingSetup.stage !== "cross") {
+        logPracticeTiming(activeCaseWithTrainingSetup.id, totalMs);
+      }
       if (isFreeMode && !freeSolveLoggedRef.current) {
         const crossAt = freeStepMarks.crossMs ?? totalMs;
         const f2lAt = freeStepMarks.f2lMs ?? totalMs;
@@ -2743,6 +3497,9 @@ function App() {
     timerStartAt,
     requiredSolvedSlots,
     solvedPattern,
+    activeCaseWithTrainingSetup.id,
+    activeCaseWithTrainingSetup.stage,
+    logPracticeTiming,
   ]);
 
   useEffect(() => {
@@ -2771,6 +3528,9 @@ function App() {
 
       if (timerRunning) {
         const totalMs = timerStartAt !== null ? performance.now() - timerStartAt : timerElapsedMs;
+        if (!isFreeMode && activeCaseWithTrainingSetup.stage !== "cross") {
+          logPracticeTiming(activeCaseWithTrainingSetup.id, totalMs);
+        }
         setTimerRunning(false);
         setTimerElapsedMs(totalMs);
         setAttemptFinished(true);
@@ -2787,7 +3547,17 @@ function App() {
     return () => {
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, [smartCubeConnected, timerElapsedMs, timerRunning, timerStartAt, view]);
+  }, [
+    activeCaseWithTrainingSetup.id,
+    activeCaseWithTrainingSetup.stage,
+    isFreeMode,
+    logPracticeTiming,
+    smartCubeConnected,
+    timerElapsedMs,
+    timerRunning,
+    timerStartAt,
+    view,
+  ]);
 
   function randomTrainingCase() {
     resetTrainingSessionFromCurrentState();
@@ -2795,7 +3565,10 @@ function App() {
       setCrossRefresh((value) => value + 1);
       return;
     }
-    const next = pickRandomCase(stage, difficulty === "all" ? undefined : difficulty);
+    const candidates = filteredCases.length > 0 ? filteredCases : stageCases;
+    const next =
+      candidates[Math.floor(Math.random() * candidates.length)] ??
+      pickRandomCase(stage, difficulty === "all" ? undefined : difficulty);
     setSelectedCaseId(next.id);
   }
 
@@ -2818,6 +3591,10 @@ function App() {
             <button className="active" onClick={() => setView("training")}>
               <BookOpen size={16} />
               Training
+            </button>
+            <button onClick={() => setView("learn")}>
+              <BookOpen size={16} />
+              Learn
             </button>
             <button onClick={() => setView("dashboard")}>
               <BarChart3 size={16} />
@@ -2990,6 +3767,29 @@ function App() {
                   ))}
                 </div>
 
+                {(stage === "oll" || stage === "pll") && (
+                  <>
+                    <label className="field-label" htmlFor="training-subset">
+                      Subset
+                    </label>
+                    <div className="segmented" id="training-subset">
+                      {subsetOptions.map((option) => (
+                        <button
+                          key={option.id}
+                          className={trainingSubsetFilter === option.id ? "active" : ""}
+                          onClick={() => {
+                            resetTrainingSessionFromCurrentState();
+                            setTrainingSubsetFilter(option.id);
+                            setDifficulty("all");
+                          }}
+                        >
+                          {option.label}
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                )}
+
                 {stage !== "cross" && (
                   <>
                     <label className="field-label" htmlFor="case-select">
@@ -3099,6 +3899,13 @@ function App() {
             Training
           </button>
           <button
+            className={view === "learn" ? "active" : ""}
+            onClick={() => setView("learn")}
+          >
+            <BookOpen size={16} />
+            Learn
+          </button>
+          <button
             className={view === "dashboard" ? "active" : ""}
             onClick={() => setView("dashboard")}
           >
@@ -3190,6 +3997,289 @@ function App() {
                 <strong>{smartCubeConnected ? "Connected" : "Offline"}</strong>
                 <p>{sessionBestMs === null ? "Pair to track solves." : `Best solve ${formatMs(sessionBestMs)}`}</p>
               </article>
+            </section>
+          </section>
+        )}
+
+        {view === "learn" && (
+          <section className="learn-page">
+            <header className="topbar">
+              <div>
+                <p className="eyebrow">Learning</p>
+                <h1>Build your algorithm library.</h1>
+                <p className="hero-copy">
+                  Track unknown, learning, and learned cases locally, then customize the algorithms you want to drill.
+                </p>
+              </div>
+              <div className="learn-summary">
+                <p>
+                  <span>Unknown</span>
+                  <strong>{progressTotals.unknown}</strong>
+                </p>
+                <p>
+                  <span>Learning</span>
+                  <strong>{progressTotals.learning}</strong>
+                </p>
+                <p>
+                  <span>Learned</span>
+                  <strong>{progressTotals.learned}</strong>
+                </p>
+              </div>
+            </header>
+
+            <section className="learn-layout">
+              <aside className="learn-sidebar">
+                <div className="section-heading">
+                  <div>
+                    <p className="eyebrow">Filters</p>
+                    <h2>Case Set</h2>
+                  </div>
+                </div>
+                <label className="field-label" htmlFor="learn-stage">
+                  Algset
+                </label>
+                <div className="segmented" id="learn-stage">
+                  {(["f2l", "oll", "pll"] as const).map((item) => (
+                    <button
+                      key={item}
+                      className={learnStage === item ? "active" : ""}
+                      onClick={() => {
+                        setLearnStage(item);
+                        setLearnSubset("all");
+                        setLearnSearch("");
+                      }}
+                    >
+                      {item.toUpperCase()}
+                    </button>
+                  ))}
+                </div>
+
+                <label className="field-label" htmlFor="learn-subset">
+                  Subset
+                </label>
+                <div className="segmented" id="learn-subset">
+                  <button
+                    className={learnSubset === "all" ? "active" : ""}
+                    onClick={() => setLearnSubset("all")}
+                  >
+                    All
+                  </button>
+                  {learnStage === "oll" && (
+                    <button
+                      className={learnSubset === "2look-oll" ? "active" : ""}
+                      onClick={() => setLearnSubset("2look-oll")}
+                    >
+                      2-look
+                    </button>
+                  )}
+                  {learnStage === "pll" && (
+                    <button
+                      className={learnSubset === "2look-pll" ? "active" : ""}
+                      onClick={() => setLearnSubset("2look-pll")}
+                    >
+                      2-look
+                    </button>
+                  )}
+                </div>
+
+                <label className="field-label" htmlFor="learn-progress">
+                  Progress
+                </label>
+                <div className="segmented" id="learn-progress">
+                  {(["all", "unknown", "learning", "learned"] as const).map((state) => (
+                    <button
+                      key={state}
+                      className={learnProgressFilter === state ? "active" : ""}
+                      onClick={() => setLearnProgressFilter(state)}
+                    >
+                      {state === "all" ? "All" : state}
+                    </button>
+                  ))}
+                </div>
+
+                <label className="field-label" htmlFor="learn-search">
+                  Search
+                </label>
+                <input
+                  className="text-input"
+                  id="learn-search"
+                  placeholder="Name, shape, or alg"
+                  value={learnSearch}
+                  onChange={(event) => setLearnSearch(event.target.value)}
+                />
+
+                <div className="alg-block practice-queue-block">
+                  <div className="alg-title">
+                    <span>Practice Queue</span>
+                  </div>
+                  <p>{selectedPracticeCases.length} selected for weakest-first drilling.</p>
+                  <p>
+                    Next focus:{" "}
+                    {weakestPracticeCase
+                      ? `${weakestPracticeCase.name} (${timingStatsLabel(recordForCase(learningData, weakestPracticeCase.id))})`
+                      : "Select cases to start."}
+                  </p>
+                  <div className="practice-action-grid">
+                    <button onClick={selectVisiblePracticeCases}>Select all shown</button>
+                    <button onClick={selectOnlyLearningPracticeCases}>Only learning</button>
+                    <button onClick={clearPracticeSelection}>Clear</button>
+                    <button
+                      className="primary-button"
+                      onClick={practiceWeakestSelectedCase}
+                      disabled={selectedPracticeCases.length === 0}
+                    >
+                      Practice weakest
+                    </button>
+                  </div>
+                </div>
+              </aside>
+
+              <section className="learn-grid-panel">
+                <div className="section-heading">
+                  <div>
+                    <p className="eyebrow">{learnCases.length} cases</p>
+                    <h2>{learnStage.toUpperCase()} Library</h2>
+                  </div>
+                </div>
+                <div className="learn-case-grid">
+                  {learnCases.map((item) => {
+                    const record = recordForCase(learningData, item.id);
+                    return (
+                      <article
+                        className={`learn-case-card ${record.state} ${
+                          selectedLearnCase.id === item.id ? "selected" : ""
+                        } ${record.selectedForPractice ? "queued" : ""}`}
+                        key={item.id}
+                      >
+                        <div
+                          className="learn-case-main"
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => {
+                            setSelectedLearnCaseId(item.id);
+                            cycleLearningState(item.id);
+                          }}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter" || event.key === " ") {
+                              event.preventDefault();
+                              setSelectedLearnCaseId(item.id);
+                              cycleLearningState(item.id);
+                            }
+                          }}
+                          title="Click to cycle progress"
+                        >
+                          <CasePreview activeCase={item} cubeOrientation={cubeOrientation} compact />
+                          <span>{item.name}</span>
+                          <strong>{record.state}</strong>
+                          <small>{item.group}</small>
+                          <small>{timingStatsLabel(record)}</small>
+                        </div>
+                        <button
+                          className="learn-pick-toggle"
+                          onClick={() => togglePracticeSelection(item.id)}
+                        >
+                          {record.selectedForPractice ? "Selected" : "Select for practice"}
+                        </button>
+                      </article>
+                    );
+                  })}
+                </div>
+              </section>
+
+              <aside className="learn-detail-panel">
+                <div className="section-heading">
+                  <div>
+                    <p className="eyebrow">{selectedLearnCase.group}</p>
+                    <h2>{selectedLearnCase.name}</h2>
+                  </div>
+                </div>
+                <CasePreview activeCase={selectedLearnCase} cubeOrientation={cubeOrientation} />
+                <div className="practice-detail-strip">
+                  <span>{timingStatsLabel(selectedLearnRecord)}</span>
+                  <button onClick={() => togglePracticeSelection(selectedLearnCase.id)}>
+                    {selectedLearnRecord.selectedForPractice ? "Remove from practice" : "Add to practice"}
+                  </button>
+                </div>
+                <div className="learn-state-row">
+                  {(["unknown", "learning", "learned"] as const).map((state) => (
+                    <button
+                      key={state}
+                      className={selectedLearnRecord.state === state ? "active" : ""}
+                      onClick={() => setLearningState(selectedLearnCase.id, state)}
+                    >
+                      {state}
+                    </button>
+                  ))}
+                </div>
+                <div className="alg-block">
+                  <div className="alg-title">
+                    <span>Default Algorithm</span>
+                    <button onClick={() => setPrimaryAlgorithm(selectedLearnCase.id, undefined)}>
+                      Use
+                    </button>
+                  </div>
+                  <code>{selectedLearnCase.solutions[selectedLearnRecord.primaryAlgorithmId ? 1 : 0]?.alg ?? selectedLearnCase.solutions[0].alg}</code>
+                  <p>{selectedLearnCase.recognition}</p>
+                </div>
+
+                <div className="alg-block">
+                  <div className="alg-title">
+                    <span>Custom Algorithms</span>
+                  </div>
+                  {selectedLearnRecord.customAlgorithms.length === 0 ? (
+                    <p>No custom algorithms yet.</p>
+                  ) : (
+                    selectedLearnRecord.customAlgorithms.map((algorithm) => (
+                      <div className="custom-alg-row" key={algorithm.id}>
+                        <code>{algorithm.alg}</code>
+                        <span>{algorithm.label}</span>
+                        <div>
+                          <button onClick={() => setPrimaryAlgorithm(selectedLearnCase.id, algorithm.id)}>
+                            Use
+                          </button>
+                          <button onClick={() => editCustomAlgorithm(algorithm)}>Edit</button>
+                          <button onClick={() => removeCustomAlgorithm(selectedLearnCase.id, algorithm.id)}>
+                            Remove
+                          </button>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+
+                <div className="alg-block">
+                  <div className="alg-title">
+                    <span>{editingCustomAlgId ? "Edit Algorithm" : "Add Algorithm"}</span>
+                  </div>
+                  <input
+                    className="text-input"
+                    value={customAlgLabelDraft}
+                    onChange={(event) => setCustomAlgLabelDraft(event.target.value)}
+                    placeholder="Label"
+                  />
+                  <textarea
+                    className="text-input alg-textarea"
+                    value={customAlgDraft}
+                    onChange={(event) => setCustomAlgDraft(event.target.value)}
+                    placeholder="R U R' U'"
+                  />
+                  <div className="action-row">
+                    <button className="primary-button" onClick={saveCustomAlgorithm}>
+                      {editingCustomAlgId ? "Save" : "Add"}
+                    </button>
+                    <button
+                      className="ghost-button"
+                      onClick={() => {
+                        setEditingCustomAlgId(null);
+                        setCustomAlgDraft("");
+                        setCustomAlgLabelDraft("Custom");
+                      }}
+                    >
+                      Clear
+                    </button>
+                  </div>
+                </div>
+              </aside>
             </section>
           </section>
         )}
