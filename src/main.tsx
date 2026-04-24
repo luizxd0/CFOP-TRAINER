@@ -2,16 +2,16 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { createRoot } from "react-dom/client";
 import * as THREE from "three";
 import {
+  BarChart3,
   Bluetooth,
   BookOpen,
-  CheckCircle2,
   Eye,
   EyeOff,
+  House,
   ListRestart,
   Moon,
   Radio,
   Shuffle,
-  Smartphone,
   Sun,
   TimerReset,
 } from "lucide-react";
@@ -39,8 +39,10 @@ import { stageMeta, type AlgorithmCase, type Stage } from "./data/cfopData";
 import "./styles.css";
 
 type CubeOrientation = "yellow-top" | "white-top";
+type CubeSkin = "classic" | "f2l";
 type ThemeMode = "light" | "dark";
 type AppMode = "trainer" | "free";
+type AppView = "home" | "training" | "dashboard";
 type GyroQuaternion = { x: number; y: number; z: number; w: number };
 type CubeKpuzzle = Awaited<ReturnType<typeof cube3x3x3.kpuzzle>>;
 type FreeSolveRecord = {
@@ -62,15 +64,21 @@ type NavigatorWithWakeLock = Navigator & {
   };
 };
 
+const FULL_STICKERING_MASK = "EDGES:------------,CORNERS:--------,CENTERS:------";
+const F2L_STICKERING_MASK_BY_ORIENTATION: Record<CubeOrientation, string> = {
+  "white-top": "EDGES:IIII--------,CORNERS:IIII----,CENTERS:I-----",
+  "yellow-top": "EDGES:----IIII----,CORNERS:----IIII,CENTERS:-----I",
+};
+
 function initialThemeMode(): ThemeMode {
   if (typeof window === "undefined") {
-    return "light";
+    return "dark";
   }
   const stored = window.localStorage.getItem("cfopTheme");
   if (stored === "light" || stored === "dark") {
     return stored;
   }
-  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  return "dark";
 }
 
 function orientationPrefix(orientation: CubeOrientation): string {
@@ -365,6 +373,48 @@ function formatMs(ms: number): string {
   return `${seconds}.${hundredths.toString().padStart(2, "0")}`;
 }
 
+function CfopSplitBar({
+  cross,
+  f2l,
+  oll,
+  pll,
+}: {
+  cross: number | null;
+  f2l: number | null;
+  oll: number | null;
+  pll: number | null;
+}) {
+  const segments = [
+    { key: "cross", label: "Cross", value: cross },
+    { key: "f2l", label: "F2L", value: f2l },
+    { key: "oll", label: "OLL", value: oll },
+    { key: "pll", label: "PLL", value: pll },
+  ];
+  const knownTotal = segments.reduce((sum, segment) => sum + (segment.value ?? 0), 0);
+  const fallbackWidth = `${100 / segments.length}%`;
+
+  return (
+    <div className="cfop-split-bar" aria-label="CFOP split bar">
+      {segments.map((segment) => {
+        const width =
+          knownTotal > 0 && segment.value !== null
+            ? `${Math.max(8, (segment.value / knownTotal) * 100)}%`
+            : fallbackWidth;
+        return (
+          <div
+            className={`cfop-split-segment ${segment.key}`}
+            key={segment.key}
+            style={{ flexBasis: width }}
+          >
+            <span>{segment.label}</span>
+            <strong>{segment.value === null ? "--" : formatMs(segment.value)}</strong>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function simplifyAlgText(alg: string): string {
   const normalized = splitAlgTokens(alg).join(" ");
   if (!normalized) {
@@ -623,7 +673,13 @@ function CubeViewer({
   alg,
   title,
   contextMoves,
+  headlineAlg = null,
+  timerInHeadline = false,
+  headlineTimerActive = false,
   cubeOrientation,
+  cubeSkin = "classic",
+  mirrorHintsEnabled = true,
+  hideControls = false,
   liveMoves = [],
   guideSteps = [],
   timerLabel = null,
@@ -636,7 +692,13 @@ function CubeViewer({
   alg: string;
   title: string;
   contextMoves: number;
+  headlineAlg?: string | null;
+  timerInHeadline?: boolean;
+  headlineTimerActive?: boolean;
   cubeOrientation: CubeOrientation;
+  cubeSkin?: CubeSkin;
+  mirrorHintsEnabled?: boolean;
+  hideControls?: boolean;
   liveMoves?: string[];
   guideSteps?: Array<{ label: string; state: GuideStepState; progress: number }>;
   timerLabel?: string | null;
@@ -668,6 +730,7 @@ function CubeViewer({
     if (!hostRef.current) {
       return;
     }
+    const effectiveMirrorHints = cubeSkin !== "f2l" && mirrorHintsEnabled;
 
     hostRef.current.replaceChildren();
     const player = new TwistyPlayer({
@@ -675,11 +738,17 @@ function CubeViewer({
       experimentalSetupAlg: "",
       alg: "",
       background: "none",
-      controlPanel: "bottom-row",
+      controlPanel: hideControls ? "none" : "bottom-row",
+      backView: "none",
       visualization: "3D",
       experimentalStickering: "full",
+      hintFacelets: effectiveMirrorHints ? "floating" : "none",
+      experimentalFaceletScale: 0.92,
+      experimentalInitialHintFaceletsAnimation: "none",
+      experimentalHintFaceletsElevation: effectiveMirrorHints ? "auto" : 0,
       cameraLatitude: 28,
-      cameraLongitude: 38,
+      cameraLongitude: 32,
+      cameraDistance: 5.85,
     });
     hostRef.current.appendChild(player);
     playerRef.current = player;
@@ -710,16 +779,31 @@ function CubeViewer({
     if (!player) {
       return;
     }
+    const effectiveMirrorHints = cubeSkin !== "f2l" && mirrorHintsEnabled;
 
-    player.controlPanel = isLive ? "none" : "bottom-row";
-    player.tempoScale = isLive ? 2.5 : 1;
+    // `setup`/`alg` arrive in display notation for the selected orientation.
+    // We rotate the whole cube frame for yellow-top and then apply those moves.
+    const playbackSetupWithOrientation = joinAlgs([orientationPrefix(cubeOrientation), setup]);
+    const playbackAlg = alg;
+
+    player.controlPanel = hideControls ? "none" : "bottom-row";
+    player.backView = "none";
+    player.hintFacelets = effectiveMirrorHints ? "floating" : "none";
+    player.experimentalHintFaceletsElevation = effectiveMirrorHints ? "auto" : 0;
+    player.experimentalStickering = "full";
+    player.experimentalStickeringMaskOrbits =
+      cubeSkin === "f2l"
+        ? F2L_STICKERING_MASK_BY_ORIENTATION[cubeOrientation]
+        : FULL_STICKERING_MASK;
+    player.experimentalFaceletScale = isLive ? 0.91 : 0.93;
+    player.tempoScale = isLive ? 1.28 : 1;
 
     if (!isLive) {
       liveSetupTokensRef.current = [];
       liveSyncReadyRef.current = false;
       liveOrientationRef.current = null;
-      player.experimentalSetupAlg = joinAlgs([orientationPrefix(cubeOrientation), setup]);
-      player.alg = alg;
+      player.experimentalSetupAlg = playbackSetupWithOrientation;
+      player.alg = playbackAlg;
       return;
     }
 
@@ -731,7 +815,7 @@ function CubeViewer({
       previousTokens.every((token, index) => token === nextTokens[index]);
 
     if (!liveSyncReadyRef.current || orientationChanged || !isPrefix) {
-      player.experimentalSetupAlg = joinAlgs([orientationPrefix(cubeOrientation), setup]);
+      player.experimentalSetupAlg = playbackSetupWithOrientation;
       player.alg = "";
       player.jumpToEnd({ flash: false });
       liveSetupTokensRef.current = nextTokens;
@@ -755,13 +839,13 @@ function CubeViewer({
       return;
     }
 
-    player.experimentalSetupAlg = joinAlgs([orientationPrefix(cubeOrientation), setup]);
+    player.experimentalSetupAlg = playbackSetupWithOrientation;
     player.alg = "";
     player.jumpToEnd({ flash: false });
     liveSetupTokensRef.current = nextTokens;
     liveSyncReadyRef.current = true;
     liveOrientationRef.current = cubeOrientation;
-  }, [setup, alg, cubeOrientation, isLive]);
+  }, [setup, alg, cubeOrientation, cubeSkin, mirrorHintsEnabled, hideControls, isLive]);
 
   useEffect(() => {
     gyroBasisRef.current = null;
@@ -850,7 +934,7 @@ function CubeViewer({
       }
       const puzzle = puzzleObjectRef.current;
       if (puzzle) {
-        puzzle.quaternion.slerp(liveTargetQuaternionRef.current, 0.25);
+        puzzle.quaternion.slerp(liveTargetQuaternionRef.current, 0.18);
       } else {
         void ensure3dHandles();
       }
@@ -882,13 +966,22 @@ function CubeViewer({
           <h2>{title}</h2>
         </div>
         <div className="chip-row">
-          {timerLabel && (
+          {timerLabel && !timerInHeadline && (
             <span className={`timer-chip ${isTimerRunning ? "running" : ""}`}>{timerLabel}</span>
           )}
           <span className="chip">{isLive ? `${contextMoves} live turns` : `${moveCount(setup)} prep moves`}</span>
           {!isLive && contextMoves > 0 && <span className="chip">{contextMoves} context moves</span>}
         </div>
       </div>
+      {(headlineAlg || (timerInHeadline && headlineTimerActive && timerLabel)) && (
+        <div className="viewer-headline">
+          {timerInHeadline && headlineTimerActive && timerLabel ? (
+            <strong className={`viewer-timer-headline ${isTimerRunning ? "running" : ""}`}>{timerLabel}</strong>
+          ) : (
+            <code>{headlineAlg}</code>
+          )}
+        </div>
+      )}
       <div className="twisty-host" ref={hostRef} />
       {isLive && (
         <>
@@ -957,7 +1050,7 @@ function SmartCubePanel({
   const [battery, setBattery] = useState<number | null>(null);
   const [orientation, setOrientation] = useState("Waiting for gyro data");
   const [isConnected, setIsConnected] = useState(false);
-  const [showBluetoothDetails, setShowBluetoothDetails] = useState(true);
+  const [showBluetoothDetails, setShowBluetoothDetails] = useState(false);
   const smartRef = useRef<SmartCubeConnection | null>(null);
   const smartSubscriptionRef = useRef<{ unsubscribe: () => void } | null>(null);
   const gyroBasisForMovesRef = useRef<THREE.Quaternion | null>(null);
@@ -1158,7 +1251,7 @@ function SmartCubePanel({
         case "DISCONNECT":
           setStatus("Disconnected");
           setIsConnected(false);
-          setShowBluetoothDetails(true);
+          setShowBluetoothDetails(false);
           gyroBasisForMovesRef.current = null;
           gyroRelativeForMovesRef.current.identity();
           emitConnectionChange(false);
@@ -1335,7 +1428,7 @@ function SmartCubePanel({
     smartRef.current = null;
     setStatus("Disconnected");
     setIsConnected(false);
-    setShowBluetoothDetails(true);
+    setShowBluetoothDetails(false);
     gyroBasisForMovesRef.current = null;
     gyroRelativeForMovesRef.current.identity();
     emitConnectionChange(false);
@@ -1388,15 +1481,13 @@ function SmartCubePanel({
           <TimerReset size={18} />
           Reset cube state
         </button>
-        {isConnected && (
-          <button
-            className="ghost-button span-2"
-            onClick={() => setShowBluetoothDetails((value) => !value)}
-          >
-            {showBluetoothDetails ? <EyeOff size={18} /> : <Eye size={18} />}
-            {showBluetoothDetails ? "Hide Bluetooth details" : "Show Bluetooth details"}
-          </button>
-        )}
+        <button
+          className="ghost-button span-2"
+          onClick={() => setShowBluetoothDetails((value) => !value)}
+        >
+          {showBluetoothDetails ? <EyeOff size={18} /> : <Eye size={18} />}
+          {showBluetoothDetails ? "Hide Bluetooth details" : "Show Bluetooth details"}
+        </button>
       </div>
       {showBluetoothDetails && (
         <>
@@ -1464,9 +1555,9 @@ function AlgorithmCard({
   const [showCaseSetup, setShowCaseSetup] = useState(false);
   const [showSolution, setShowSolution] = useState(false);
   const mainAlg = activeCase.solutions[0];
-  const displaySetup = remapAlgForOrientation(activeCase.setup, cubeOrientation);
-  const displayCaseSetup = remapAlgForOrientation(activeCase.baseSetup, cubeOrientation);
-  const displaySolution = remapAlgForOrientation(mainAlg.alg, cubeOrientation);
+  const displaySetup = activeCase.setup;
+  const displayCaseSetup = activeCase.baseSetup;
+  const displaySolution = mainAlg.alg;
 
   useEffect(() => {
     setShowSolution(false);
@@ -1535,6 +1626,7 @@ function FreePracticePanel({
   inspectionRunning,
   inspectionRemainingMs,
   timerLabel,
+  totalElapsedMs,
   stepMarks,
 }: {
   scramble: string;
@@ -1542,6 +1634,7 @@ function FreePracticePanel({
   inspectionRunning: boolean;
   inspectionRemainingMs: number | null;
   timerLabel: string;
+  totalElapsedMs: number;
   stepMarks: { crossMs: number | null; f2lMs: number | null; ollMs: number | null };
 }) {
   const inspectionText = inspectionEnabled
@@ -1551,6 +1644,19 @@ function FreePracticePanel({
         ? "Done"
         : "Ready"
     : "Unlimited";
+  const crossSplit = stepMarks.crossMs;
+  const f2lSplit =
+    stepMarks.crossMs !== null && stepMarks.f2lMs !== null
+      ? Math.max(0, stepMarks.f2lMs - stepMarks.crossMs)
+      : null;
+  const ollSplit =
+    stepMarks.f2lMs !== null && stepMarks.ollMs !== null
+      ? Math.max(0, stepMarks.ollMs - stepMarks.f2lMs)
+      : null;
+  const pllSplit =
+    stepMarks.ollMs !== null
+      ? Math.max(0, totalElapsedMs - stepMarks.ollMs)
+      : null;
   return (
     <section className="algorithm-panel">
       <div className="section-heading">
@@ -1571,9 +1677,11 @@ function FreePracticePanel({
           <span>Current Split Marks</span>
         </div>
         <p>Inspection: {inspectionText}</p>
-        <p>Cross: {stepMarks.crossMs === null ? "--" : formatMs(stepMarks.crossMs)}</p>
-        <p>F2L: {stepMarks.f2lMs === null ? "--" : formatMs(stepMarks.f2lMs)}</p>
-        <p>OLL: {stepMarks.ollMs === null ? "--" : formatMs(stepMarks.ollMs)}</p>
+        <p>Cross: {crossSplit === null ? "--" : formatMs(crossSplit)}</p>
+        <p>F2L: {f2lSplit === null ? "--" : formatMs(f2lSplit)}</p>
+        <p>OLL: {ollSplit === null ? "--" : formatMs(ollSplit)}</p>
+        <p>PLL: {pllSplit === null ? "--" : formatMs(pllSplit)}</p>
+        <p>Total: {formatMs(totalElapsedMs)}</p>
       </div>
     </section>
   );
@@ -1581,10 +1689,13 @@ function FreePracticePanel({
 
 function App() {
   const [themeMode, setThemeMode] = useState<ThemeMode>(initialThemeMode);
+  const [view, setView] = useState<AppView>("training");
   const [mode, setMode] = useState<AppMode>("trainer");
   const [stage, setStage] = useState<Stage>("cross");
   const [cubeOrientation, setCubeOrientation] =
     useState<CubeOrientation>("yellow-top");
+  const [cubeSkin, setCubeSkin] = useState<CubeSkin>("classic");
+  const [mirrorHintsEnabled, setMirrorHintsEnabled] = useState(true);
   const [smartCubeConnected, setSmartCubeConnected] = useState(false);
   const [smartCubeMoves, setSmartCubeMoves] = useState<string[]>([]);
   const smartCubeMovesRef = useRef<string[]>([]);
@@ -1626,6 +1737,7 @@ function App() {
   const bootstrappingFaceletsRef = useRef(false);
   const [difficulty, setDifficulty] = useState<number | "all">(1);
   const [selectedCaseId, setSelectedCaseId] = useState("cross-1");
+  const [showPanelSolution, setShowPanelSolution] = useState(false);
   const [contextAlg, setContextAlg] = useState("");
   const [crossRefresh, setCrossRefresh] = useState(0);
   const recentCrossSetupsByDifficultyRef = useRef<Record<number, string[]>>({});
@@ -1650,6 +1762,12 @@ function App() {
       window.localStorage.setItem("cfopTheme", themeMode);
     }
   }, [themeMode]);
+
+  useEffect(() => {
+    if (cubeSkin === "f2l" && mirrorHintsEnabled) {
+      setMirrorHintsEnabled(false);
+    }
+  }, [cubeSkin, mirrorHintsEnabled]);
 
   useEffect(() => {
     smartCubeMovesRef.current = smartCubeMoves;
@@ -1770,31 +1888,33 @@ function App() {
     return { ...activeCase, setup };
   }, [activeCase, contextAlg, crossDifficulty, crossGenerated, isCross]);
 
+  useEffect(() => {
+    setShowPanelSolution(false);
+  }, [activeCaseWithTrainingSetup.id, activeCaseWithTrainingSetup.setup]);
+
   const solution = activeCaseWithTrainingSetup.solutions[0].alg;
-  const freeScrambleForOrientation = useMemo(
-    () => remapAlgForOrientation(freeScramble, cubeOrientation),
-    [cubeOrientation, freeScramble],
-  );
+  const targetSetupAlgCanonical = isFreeMode ? freeScramble : activeCaseWithTrainingSetup.setup;
   const setupAlgForOrientation = useMemo(
-    () => remapAlgForOrientation(activeCaseWithTrainingSetup.setup, cubeOrientation),
-    [activeCaseWithTrainingSetup.setup, cubeOrientation],
+    () => activeCaseWithTrainingSetup.setup,
+    [activeCaseWithTrainingSetup.setup],
   );
   const solutionAlgForOrientation = useMemo(
-    () => remapAlgForOrientation(solution, cubeOrientation),
-    [solution, cubeOrientation],
+    () => solution,
+    [solution],
   );
-  const smartCubeAlg = useMemo(
+  const smartCubeAlgCanonical = useMemo(
+    () => smartCubeMoves.join(" "),
+    [smartCubeMoves],
+  );
+  const smartCubeAlgForOrientation = useMemo(
     () => smartCubeMoves.map((move) => remapMoveForOrientation(move, cubeOrientation)).join(" "),
     [cubeOrientation, smartCubeMoves],
   );
-  const liveSessionStartAlg = useMemo(
-    () =>
-      liveSessionStartMoves
-        .map((move) => remapMoveForOrientation(move, cubeOrientation))
-        .join(" "),
-    [cubeOrientation, liveSessionStartMoves],
+  const liveSessionStartAlgCanonical = useMemo(
+    () => liveSessionStartMoves.join(" "),
+    [liveSessionStartMoves],
   );
-  const targetSetupAlgForOrientation = isFreeMode ? freeScrambleForOrientation : setupAlgForOrientation;
+  const targetSetupAlgForOrientation = isFreeMode ? freeScramble : setupAlgForOrientation;
   const setupGuideAlg = useMemo(
     () => {
       const raw = smartCubeConnected
@@ -1812,11 +1932,9 @@ function App() {
       : activeCaseWithTrainingSetup.name;
   // In live mode we must use setup (not alg) so the cube shows current state immediately.
   const viewerSetup = isLiveViewer
-    ? smartCubeAlg
-    : isFreeMode
-      ? freeScramble
-      : activeCaseWithTrainingSetup.setup;
-  const viewerAlg = isLiveViewer || isFreeMode ? "" : solution;
+    ? smartCubeAlgForOrientation
+    : targetSetupAlgForOrientation;
+  const viewerAlg = isLiveViewer || isFreeMode ? "" : solutionAlgForOrientation;
   const viewerContextMoves = isLiveViewer ? liveSessionMoveCount : isFreeMode ? 0 : moveCount(contextAlg);
   const setupGuideStepViews = useMemo(
     () => {
@@ -1838,17 +1956,88 @@ function App() {
     }
     return formatMs(timerElapsedMs);
   }, [freeInspectionEnabled, freeInspectionRemainingMs, freeInspectionRunning, isFreeMode, timerElapsedMs]);
+  const freeInspectionText = freeInspectionEnabled
+    ? freeInspectionRunning
+      ? `${Math.max(0, Math.ceil((freeInspectionRemainingMs ?? 0) / 1000))}s`
+      : freeInspectionRemainingMs === 0
+        ? "Done"
+        : "Ready"
+    : "Unlimited";
+  const freeCurrentSplits = useMemo(() => {
+    const cross = freeStepMarks.crossMs;
+    const f2l =
+      freeStepMarks.crossMs !== null && freeStepMarks.f2lMs !== null
+        ? Math.max(0, freeStepMarks.f2lMs - freeStepMarks.crossMs)
+        : null;
+    const oll =
+      freeStepMarks.f2lMs !== null && freeStepMarks.ollMs !== null
+        ? Math.max(0, freeStepMarks.ollMs - freeStepMarks.f2lMs)
+        : null;
+    const pll =
+      freeStepMarks.ollMs !== null
+        ? Math.max(0, timerElapsedMs - freeStepMarks.ollMs)
+        : null;
+    return { cross, f2l, oll, pll, total: timerElapsedMs };
+  }, [freeStepMarks.crossMs, freeStepMarks.f2lMs, freeStepMarks.ollMs, timerElapsedMs]);
+  const totalCaseCount = useMemo(
+    () => stages.reduce((sum, item) => sum + casesForStage(item).length, 0),
+    [],
+  );
+  const sessionBestMs = useMemo(() => {
+    if (freeLastSolves.length === 0) {
+      return null;
+    }
+    return Math.min(...freeLastSolves.map((solve) => solve.totalMs));
+  }, [freeLastSolves]);
+  const recentSolves = useMemo(
+    () => [...freeLastSolves].sort((a, b) => b.finishedAt - a.finishedAt),
+    [freeLastSolves],
+  );
+  const best5Solves = useMemo(
+    () => [...freeLastSolves].sort((a, b) => a.totalMs - b.totalMs).slice(0, 5),
+    [freeLastSolves],
+  );
+  const best5AverageMs = useMemo(() => {
+    if (best5Solves.length === 0) {
+      return null;
+    }
+    const total = best5Solves.reduce((sum, solve) => sum + solve.totalMs, 0);
+    return total / best5Solves.length;
+  }, [best5Solves]);
+  const averageSplitMs = useMemo(() => {
+    if (freeLastSolves.length === 0) {
+      return null;
+    }
+    const totals = freeLastSolves.reduce(
+      (acc, solve) => {
+        acc.cross += solve.crossMs;
+        acc.f2l += solve.f2lMs;
+        acc.oll += solve.ollMs;
+        acc.pll += solve.pllMs;
+        acc.total += solve.totalMs;
+        return acc;
+      },
+      { cross: 0, f2l: 0, oll: 0, pll: 0, total: 0 },
+    );
+    return {
+      cross: totals.cross / freeLastSolves.length,
+      f2l: totals.f2l / freeLastSolves.length,
+      oll: totals.oll / freeLastSolves.length,
+      pll: totals.pll / freeLastSolves.length,
+      total: totals.total / freeLastSolves.length,
+    };
+  }, [freeLastSolves]);
   const currentLivePattern = useMemo(
-    () => (cubeKpuzzle ? cubeKpuzzle.defaultPattern().applyAlg(smartCubeAlg) : null),
-    [cubeKpuzzle, smartCubeAlg],
+    () => (cubeKpuzzle ? cubeKpuzzle.defaultPattern().applyAlg(smartCubeAlgCanonical) : null),
+    [cubeKpuzzle, smartCubeAlgCanonical],
   );
   const solvedPattern = useMemo(
     () => (cubeKpuzzle ? cubeKpuzzle.defaultPattern() : null),
     [cubeKpuzzle],
   );
   const setupTargetPattern = useMemo(
-    () => (cubeKpuzzle ? cubeKpuzzle.defaultPattern().applyAlg(targetSetupAlgForOrientation) : null),
-    [cubeKpuzzle, targetSetupAlgForOrientation],
+    () => (cubeKpuzzle ? cubeKpuzzle.defaultPattern().applyAlg(targetSetupAlgCanonical) : null),
+    [cubeKpuzzle, targetSetupAlgCanonical],
   );
   const solvedTargetPattern = useMemo(
     () => {
@@ -1856,10 +2045,10 @@ function App() {
         return solvedPattern;
       }
       return setupTargetPattern
-        ? setupTargetPattern.applyAlg(solutionAlgForOrientation)
+        ? setupTargetPattern.applyAlg(solution)
         : null;
     },
-    [isFreeMode, setupTargetPattern, solutionAlgForOrientation, solvedPattern],
+    [isFreeMode, setupTargetPattern, solution, solvedPattern],
   );
   const requiredSolvedSlots = useMemo(() => {
     if (!setupTargetPattern || !solvedTargetPattern || !solvedPattern) {
@@ -2228,11 +2417,14 @@ function App() {
 
     const applyFallback = () => {
       const normalizeToSolved =
-        liveSessionStartAlg.trim().length > 0
-          ? new Alg(liveSessionStartAlg).invert().toString()
+        liveSessionStartAlgCanonical.trim().length > 0
+          ? new Alg(liveSessionStartAlgCanonical).invert().toString()
           : "";
+      const canonical = simplifyAlgText(
+        joinAlgs([normalizeToSolved, targetSetupAlgCanonical]),
+      );
       setSessionAwareSetupAlg(
-        simplifyAlgText(joinAlgs([normalizeToSolved, targetSetupAlgForOrientation])),
+        canonical,
       );
     };
 
@@ -2241,16 +2433,17 @@ function App() {
       return;
     }
 
-    const sessionStartPattern = cubeKpuzzle.defaultPattern().applyAlg(liveSessionStartAlg);
+    const sessionStartPattern = cubeKpuzzle.defaultPattern().applyAlg(liveSessionStartAlgCanonical);
     void experimentalSolve3x3x3IgnoringCenters(sessionStartPattern)
       .then((solveToSolved) => {
         if (cancelled) {
           return;
         }
+        const canonical = simplifyAlgText(
+          joinAlgs([stripCubeRotations(solveToSolved.toString()), targetSetupAlgCanonical]),
+        );
         setSessionAwareSetupAlg(
-          simplifyAlgText(
-            joinAlgs([stripCubeRotations(solveToSolved.toString()), targetSetupAlgForOrientation]),
-          ),
+          canonical,
         );
       })
       .catch(() => {
@@ -2265,8 +2458,9 @@ function App() {
     };
   }, [
     cubeKpuzzle,
-    liveSessionStartAlg,
-    targetSetupAlgForOrientation,
+    liveSessionStartAlgCanonical,
+    targetSetupAlgCanonical,
+    cubeOrientation,
     smartCubeConnected,
     trainingSessionId,
   ]);
@@ -2461,6 +2655,9 @@ function App() {
     if (!timerRunning || !currentLivePattern || !solvedTargetPattern) {
       return;
     }
+    if (!smartCubeConnected) {
+      return;
+    }
     const exactMatch = currentLivePattern.isIdentical(solvedTargetPattern);
     const freeModeGoalMatch =
       isFreeMode &&
@@ -2537,6 +2734,7 @@ function App() {
     freeStepMarks.f2lMs,
     freeStepMarks.ollMs,
     isFreeMode,
+    smartCubeConnected,
     timerRunning,
     currentLivePattern,
     solvedTargetPattern,
@@ -2546,6 +2744,50 @@ function App() {
     requiredSolvedSlots,
     solvedPattern,
   ]);
+
+  useEffect(() => {
+    if (view !== "training" || smartCubeConnected) {
+      return;
+    }
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.code !== "Space" || event.repeat) {
+        return;
+      }
+
+      const target = event.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.tagName === "SELECT" ||
+          target.tagName === "BUTTON" ||
+          target.isContentEditable)
+      ) {
+        return;
+      }
+
+      event.preventDefault();
+
+      if (timerRunning) {
+        const totalMs = timerStartAt !== null ? performance.now() - timerStartAt : timerElapsedMs;
+        setTimerRunning(false);
+        setTimerElapsedMs(totalMs);
+        setAttemptFinished(true);
+        return;
+      }
+
+      setAttemptFinished(false);
+      setTimerElapsedMs(0);
+      setTimerStartAt(performance.now());
+      setTimerRunning(true);
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [smartCubeConnected, timerElapsedMs, timerRunning, timerStartAt, view]);
 
   function randomTrainingCase() {
     resetTrainingSessionFromCurrentState();
@@ -2557,22 +2799,31 @@ function App() {
     setSelectedCaseId(next.id);
   }
 
-  return (
-    <main className="app-shell">
-      <header className="topbar">
-        <div>
-          <p className="eyebrow">CFOP Trainer</p>
-          <h1>Practice Cross, F2L, OLL and PLL with visual setup drills.</h1>
-        </div>
-        <div className="platforms">
-          <span>
-            <CheckCircle2 size={16} />
-            PC Chrome/Edge
-          </span>
-          <span>
-            <Smartphone size={16} />
-            Android Chrome
-          </span>
+  if (view === "training") {
+    return (
+      <main className="app-shell-training">
+        <header className="training-topbar">
+          <a className="brand-lockup" href="/" aria-label="CFOP Trainer home">
+            <span className="brand-mark">c</span>
+            <span>
+              <strong>cfop trainer</strong>
+              <em>Level up your cubing</em>
+            </span>
+          </a>
+          <nav className="app-nav app-nav-horizontal" aria-label="App pages">
+            <button onClick={() => setView("home")}>
+              <House size={16} />
+              Home
+            </button>
+            <button className="active" onClick={() => setView("training")}>
+              <BookOpen size={16} />
+              Training
+            </button>
+            <button onClick={() => setView("dashboard")}>
+              <BarChart3 size={16} />
+              Dashboard
+            </button>
+          </nav>
           <button
             className="theme-toggle"
             onClick={() => setThemeMode((current) => (current === "dark" ? "light" : "dark"))}
@@ -2581,192 +2832,490 @@ function App() {
           >
             {themeMode === "dark" ? <Sun size={16} /> : <Moon size={16} />}
           </button>
-        </div>
+        </header>
+
+        <section className="trainer-layout trainer-layout-standalone">
+          <aside className="control-panel">
+            <nav className="stage-tabs training-stage-tabs" aria-label="CFOP stages">
+              <button
+                className={isFreeMode ? "active" : ""}
+                onClick={handleFreeMode}
+              >
+                Free
+              </button>
+              {stages.map((item) => (
+                <button
+                  key={item}
+                  className={!isFreeMode && stage === item ? "active" : ""}
+                  onClick={() => handleStageChange(item)}
+                >
+                  {stageMeta[item].title}
+                </button>
+              ))}
+            </nav>
+
+            <div className="section-heading">
+              <div>
+                <p className="eyebrow">{isFreeMode ? "Solve Trainer" : stageMeta[stage].caseLabel}</p>
+                <h2>{isFreeMode ? "Free Practice" : stageMeta[stage].title}</h2>
+              </div>
+              <BookOpen size={20} />
+            </div>
+            <p className="muted">
+              {isFreeMode
+                ? "Drill full solves with inspection, split timing, and rolling history."
+                : stageMeta[stage].subtitle}
+            </p>
+
+            <label className="field-label" htmlFor="cube-orientation">
+              Cube orientation
+            </label>
+            <div className="segmented" id="cube-orientation">
+              <button
+                className={cubeOrientation === "yellow-top" ? "active" : ""}
+                onClick={() => setCubeOrientation("yellow-top")}
+              >
+                Yellow top
+              </button>
+              <button
+                className={cubeOrientation === "white-top" ? "active" : ""}
+                onClick={() => setCubeOrientation("white-top")}
+              >
+                White top
+              </button>
+            </div>
+            <label className="field-label" htmlFor="cube-skin">
+              Cube skin
+            </label>
+            <div className="segmented" id="cube-skin">
+              <button
+                className={cubeSkin === "f2l" ? "active" : ""}
+                onClick={() => setCubeSkin("f2l")}
+              >
+                F2L
+              </button>
+              <button
+                className={cubeSkin === "classic" ? "active" : ""}
+                onClick={() => setCubeSkin("classic")}
+              >
+                Classic
+              </button>
+            </div>
+            <label className="field-label" htmlFor="mirror-hints">
+              Mirror hints
+            </label>
+            <div className="segmented" id="mirror-hints">
+              <button
+                className={cubeSkin !== "f2l" && mirrorHintsEnabled ? "active" : ""}
+                disabled={cubeSkin === "f2l"}
+                onClick={() => setMirrorHintsEnabled(true)}
+              >
+                On
+              </button>
+              <button
+                className={cubeSkin === "f2l" || !mirrorHintsEnabled ? "active" : ""}
+                disabled={cubeSkin === "f2l"}
+                onClick={() => setMirrorHintsEnabled(false)}
+              >
+                Off
+              </button>
+            </div>
+
+            {isFreeMode ? (
+              <>
+                <label className="field-label" htmlFor="inspection-enabled">
+                  Inspection
+                </label>
+                <div className="segmented" id="inspection-enabled">
+                  <button
+                    className={freeInspectionEnabled ? "active" : ""}
+                    onClick={() => setFreeInspectionEnabled(true)}
+                  >
+                    15s
+                  </button>
+                  <button
+                    className={!freeInspectionEnabled ? "active" : ""}
+                    onClick={() => setFreeInspectionEnabled(false)}
+                  >
+                    Unlimited
+                  </button>
+                </div>
+                <div className="action-row">
+                  <button
+                    className="primary-button"
+                    onClick={handleNewFreeScramble}
+                  >
+                    <Shuffle size={18} />
+                    New scramble
+                  </button>
+                </div>
+                {smartCubeConnected && (
+                  <div className="alg-block">
+                    <div className="alg-title">
+                      <span>Current Splits</span>
+                    </div>
+                    <CfopSplitBar
+                      cross={freeCurrentSplits.cross}
+                      f2l={freeCurrentSplits.f2l}
+                      oll={freeCurrentSplits.oll}
+                      pll={freeCurrentSplits.pll}
+                    />
+                    <p>Inspection: {freeInspectionText}</p>
+                    <p>Total: {formatMs(freeCurrentSplits.total)}</p>
+                  </div>
+                )}
+              </>
+            ) : (
+              <>
+                <label className="field-label" htmlFor="difficulty">
+                  Difficulty
+                </label>
+                <div className="segmented" id="difficulty">
+                  {stage !== "cross" && (
+                    <button
+                      className={difficulty === "all" ? "active" : ""}
+                      onClick={() => handleDifficultyChange("all")}
+                    >
+                      All
+                    </button>
+                  )}
+                  {availableDifficulties.map((level) => (
+                    <button
+                      key={level}
+                      className={difficulty === level ? "active" : ""}
+                      onClick={() => handleDifficultyChange(level)}
+                    >
+                      {stage === "cross" ? `${level}` : `L${level}`}
+                    </button>
+                  ))}
+                </div>
+
+                {stage !== "cross" && (
+                  <>
+                    <label className="field-label" htmlFor="case-select">
+                      Case
+                    </label>
+                    <select
+                      id="case-select"
+                      value={activeCase.id}
+                      onChange={(event) => handleCaseChange(event.target.value)}
+                    >
+                      {filteredCases.map((item) => (
+                        <option key={item.id} value={item.id}>
+                          {item.name}
+                        </option>
+                      ))}
+                    </select>
+                  </>
+                )}
+
+                <div className="action-row">
+                  <button
+                    className="primary-button"
+                    onClick={randomTrainingCase}
+                    disabled={stage === "cross" && crossGenerated.loading}
+                  >
+                    <Shuffle size={18} />
+                    {stage === "cross"
+                      ? crossGenerated.loading
+                        ? "Generating"
+                        : "New cross case"
+                      : "Random case"}
+                  </button>
+                </div>
+                <div className="alg-block solution solution-at-bottom">
+                  <div className="alg-title">
+                    <span>Best Solution</span>
+                    <button onClick={() => setShowPanelSolution((value) => !value)}>
+                      {showPanelSolution ? <EyeOff size={16} /> : <Eye size={16} />}
+                    </button>
+                  </div>
+                  <code>{showPanelSolution ? solutionAlgForOrientation : "Try it first"}</code>
+                  {showPanelSolution && (
+                    <p>{activeCaseWithTrainingSetup.solutions[0]?.source ?? "CFOP reference"}</p>
+                  )}
+                </div>
+              </>
+            )}
+          </aside>
+
+          <div className="main-column main-column-free">
+            <CubeViewer
+              title={viewerTitle}
+              setup={viewerSetup}
+              alg={viewerAlg}
+              contextMoves={viewerContextMoves}
+              headlineAlg={setupGuideAlg}
+              timerInHeadline={isFreeMode}
+              headlineTimerActive={isFreeMode && (timerRunning || freeInspectionRunning)}
+              cubeOrientation={cubeOrientation}
+              cubeSkin={cubeSkin}
+              mirrorHintsEnabled={mirrorHintsEnabled}
+              hideControls={isFreeMode}
+              liveMoves={smartCubeDisplayMoves}
+              guideSteps={setupGuideStepViews}
+              timerLabel={timerLabel}
+              isTimerRunning={timerRunning}
+              isLive={isLiveViewer}
+              gyroQuaternion={isLiveViewer ? smartCubeGyro : null}
+              gyroSession={smartCubeGyroSession}
+            />
+          </div>
+
+          <SmartCubePanel
+            onMove={handleSmartCubeMove}
+            onGyro={handleSmartCubeGyro}
+            onFacelets={handleSmartCubeFacelets}
+            onConnectionChange={handleSmartCubeConnectionChange}
+            onResetLiveState={handleSmartCubeResetLiveState}
+            cubeOrientation={cubeOrientation}
+            freeLastSolves={freeLastSolves}
+          />
+        </section>
+      </main>
+    );
+  }
+
+  return (
+    <main className="app-shell">
+      <header className="training-topbar">
+        <a className="brand-lockup" href="/" aria-label="CFOP Trainer home">
+          <span className="brand-mark">c</span>
+          <span>
+            <strong>cfop trainer</strong>
+            <em>Level up your cubing</em>
+          </span>
+        </a>
+        <nav className="app-nav app-nav-horizontal" aria-label="App pages">
+          <button
+            className={view === "home" ? "active" : ""}
+            onClick={() => setView("home")}
+          >
+            <House size={16} />
+            Home
+          </button>
+          <button onClick={() => setView("training")}>
+            <BookOpen size={16} />
+            Training
+          </button>
+          <button
+            className={view === "dashboard" ? "active" : ""}
+            onClick={() => setView("dashboard")}
+          >
+            <BarChart3 size={16} />
+            Dashboard
+          </button>
+        </nav>
+        <button
+          className="theme-toggle"
+          onClick={() => setThemeMode((current) => (current === "dark" ? "light" : "dark"))}
+          title={themeMode === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+          aria-label={themeMode === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+        >
+          {themeMode === "dark" ? <Sun size={16} /> : <Moon size={16} />}
+        </button>
       </header>
 
-      <nav className="stage-tabs" aria-label="CFOP stages">
-        <button
-          className={isFreeMode ? "active" : ""}
-          onClick={handleFreeMode}
-        >
-          Free
-        </button>
-        {stages.map((item) => (
-          <button
-            key={item}
-            className={!isFreeMode && stage === item ? "active" : ""}
-            onClick={() => handleStageChange(item)}
-          >
-            {stageMeta[item].title}
-          </button>
-        ))}
-      </nav>
-
-      <section className="trainer-layout">
-        <aside className="control-panel">
-          <div className="section-heading">
-            <div>
-              <p className="eyebrow">{isFreeMode ? "Solve Trainer" : stageMeta[stage].caseLabel}</p>
-              <h2>{isFreeMode ? "Free Practice" : stageMeta[stage].title}</h2>
-            </div>
-            <BookOpen size={20} />
-          </div>
-          <p className="muted">
-            {isFreeMode
-              ? "Drill full solves with inspection, split timing, and rolling history."
-              : stageMeta[stage].subtitle}
-          </p>
-
-          <label className="field-label" htmlFor="cube-orientation">
-            Cube orientation
-          </label>
-          <div className="segmented" id="cube-orientation">
-            <button
-              className={cubeOrientation === "yellow-top" ? "active" : ""}
-              onClick={() => setCubeOrientation("yellow-top")}
-            >
-              Yellow top
-            </button>
-            <button
-              className={cubeOrientation === "white-top" ? "active" : ""}
-              onClick={() => setCubeOrientation("white-top")}
-            >
-              White top
-            </button>
-          </div>
-
-          {isFreeMode ? (
-            <>
-              <label className="field-label" htmlFor="inspection-enabled">
-                Inspection
-              </label>
-              <div className="segmented" id="inspection-enabled">
-                <button
-                  className={freeInspectionEnabled ? "active" : ""}
-                  onClick={() => setFreeInspectionEnabled(true)}
-                >
-                  15s
-                </button>
-                <button
-                  className={!freeInspectionEnabled ? "active" : ""}
-                  onClick={() => setFreeInspectionEnabled(false)}
-                >
-                  Unlimited
-                </button>
+      <section className="app-workspace">
+        {view === "home" && (
+          <section className="home-page">
+            <header className="topbar">
+              <div>
+                <p className="eyebrow">Smart Cube App</p>
+                <h1>Connect & train your CFOP solves.</h1>
+                <p className="hero-copy">
+                  Guided setup drills, live cube tracking, session timing, and algorithm practice in one focused workspace.
+                </p>
               </div>
-              <div className="action-row">
-                <button
-                  className="primary-button"
-                  onClick={handleNewFreeScramble}
-                >
-                  <Shuffle size={18} />
-                  New scramble
-                </button>
-              </div>
-            </>
-          ) : (
-            <>
-              <label className="field-label" htmlFor="difficulty">
-                Difficulty
-              </label>
-              <div className="segmented" id="difficulty">
-                {stage !== "cross" && (
-                  <button
-                    className={difficulty === "all" ? "active" : ""}
-                    onClick={() => handleDifficultyChange("all")}
-                  >
-                    All
+            </header>
+            <section className="home-hero-panel">
+              <div>
+                <p className="eyebrow">Playground Ready</p>
+                <h2>Train CFOP with Smart Cube tracking in one focused workspace.</h2>
+                <p>
+                  Use dedicated setup drills or free-play solves with inspection, split timing, and live cube sync.
+                </p>
+                <div className="action-row">
+                  <button className="primary-button" onClick={() => setView("training")}>
+                    Open training
                   </button>
+                  <button className="ghost-button" onClick={() => setView("dashboard")}>
+                    View dashboard
+                  </button>
+                </div>
+              </div>
+              <div className="home-hero-stats">
+                <p>
+                  <span>Case Library</span>
+                  <strong>{totalCaseCount}</strong>
+                </p>
+                <p>
+                  <span>Smart Cube</span>
+                  <strong>{smartCubeConnected ? "Connected" : "Offline"}</strong>
+                </p>
+                <p>
+                  <span>Best Solve</span>
+                  <strong>{sessionBestMs === null ? "--" : formatMs(sessionBestMs)}</strong>
+                </p>
+              </div>
+            </section>
+            <section className="home-grid">
+              <article className="metric-card">
+                <span>Start Training</span>
+                <strong>Live Practice</strong>
+                <p>Open dedicated training layout with smart-cube setup guide and timer.</p>
+                <div className="action-row">
+                  <button className="primary-button" onClick={() => setView("training")}>
+                    Open training
+                  </button>
+                </div>
+              </article>
+              <article className="metric-card">
+                <span>Detailed Stats</span>
+                <strong>Dashboard</strong>
+                <p>Review best-of-5 ranking, average splits, and your most recent solves.</p>
+                <div className="action-row">
+                  <button className="ghost-button" onClick={() => setView("dashboard")}>
+                    Open dashboard
+                  </button>
+                </div>
+              </article>
+              <article className="metric-card">
+                <span>Case Library</span>
+                <strong>{totalCaseCount}</strong>
+                <p>Cross, F2L, OLL and PLL drills ready for deliberate practice.</p>
+              </article>
+              <article className="metric-card">
+                <span>Smart Cube</span>
+                <strong>{smartCubeConnected ? "Connected" : "Offline"}</strong>
+                <p>{sessionBestMs === null ? "Pair to track solves." : `Best solve ${formatMs(sessionBestMs)}`}</p>
+              </article>
+            </section>
+          </section>
+        )}
+
+        {view === "dashboard" && (
+          <section className="dashboard-page">
+            <header className="topbar">
+              <div>
+                <p className="eyebrow">Statistics</p>
+                <h1>Session Dashboard</h1>
+                <p className="hero-copy">
+                  Ranked best times, split averages, and latest solve history from your free-practice sessions.
+                </p>
+              </div>
+            </header>
+
+            <section className="dashboard-strip" aria-label="Session overview">
+              <article className="metric-card">
+                <span>Best Solve</span>
+                <strong>{sessionBestMs === null ? "--" : formatMs(sessionBestMs)}</strong>
+                <p>Fastest total solve in recent sessions.</p>
+              </article>
+              <article className="metric-card">
+                <span>Best of 5 Avg</span>
+                <strong>{best5AverageMs === null ? "--" : formatMs(best5AverageMs)}</strong>
+                <p>Average of your top five solves.</p>
+              </article>
+              <article className="metric-card">
+                <span>Recent Solves</span>
+                <strong>{recentSolves.length}</strong>
+                <p>Stored in this browser session.</p>
+              </article>
+              <article className="metric-card">
+                <span>Cube Status</span>
+                <strong>{smartCubeConnected ? "Connected" : "Offline"}</strong>
+                <p>{smartCubeConnected ? "Live tracking enabled." : "Connect cube to track turns."}</p>
+              </article>
+            </section>
+
+            <section className="dashboard-details">
+              <article className="algorithm-panel">
+                <div className="section-heading">
+                  <div>
+                    <p className="eyebrow">Splits</p>
+                    <h2>Average Split Times</h2>
+                  </div>
+                </div>
+                {averageSplitMs ? (
+                  <div className="alg-block compact-data-block">
+                    <CfopSplitBar
+                      cross={averageSplitMs.cross}
+                      f2l={averageSplitMs.f2l}
+                      oll={averageSplitMs.oll}
+                      pll={averageSplitMs.pll}
+                    />
+                    <div className="stat-grid compact-stat-grid">
+                      <p>
+                        <span>Cross</span>
+                        <strong>{formatMs(averageSplitMs.cross)}</strong>
+                      </p>
+                      <p>
+                        <span>F2L</span>
+                        <strong>{formatMs(averageSplitMs.f2l)}</strong>
+                      </p>
+                      <p>
+                        <span>OLL</span>
+                        <strong>{formatMs(averageSplitMs.oll)}</strong>
+                      </p>
+                      <p>
+                        <span>PLL</span>
+                        <strong>{formatMs(averageSplitMs.pll)}</strong>
+                      </p>
+                    </div>
+                    <p>Total average: {formatMs(averageSplitMs.total)}</p>
+                  </div>
+                ) : (
+                  <div className="alg-block">
+                    <p>No solve data yet.</p>
+                  </div>
                 )}
-                {availableDifficulties.map((level) => (
-                  <button
-                    key={level}
-                    className={difficulty === level ? "active" : ""}
-                    onClick={() => handleDifficultyChange(level)}
-                  >
-                    {stage === "cross" ? `${level}` : `L${level}`}
-                  </button>
-                ))}
-              </div>
+              </article>
 
-              {stage !== "cross" && (
-                <>
-                  <label className="field-label" htmlFor="case-select">
-                    Case
-                  </label>
-                  <select
-                    id="case-select"
-                    value={activeCase.id}
-                    onChange={(event) => handleCaseChange(event.target.value)}
-                  >
-                    {filteredCases.map((item) => (
-                      <option key={item.id} value={item.id}>
-                        {item.name}
-                      </option>
-                    ))}
-                  </select>
-                </>
-              )}
+              <article className="algorithm-panel">
+                <div className="section-heading">
+                  <div>
+                    <p className="eyebrow">History</p>
+                    <h2>Latest Solves</h2>
+                  </div>
+                </div>
+                <div className="alg-block">
+                  {recentSolves.length === 0 ? (
+                    <p>No solves yet.</p>
+                  ) : (
+                    <div className="solve-table-wrap">
+                      <table className="solve-table">
+                        <thead>
+                          <tr>
+                            <th>#</th>
+                            <th>Total</th>
+                            <th>Cross</th>
+                            <th>F2L</th>
+                            <th>OLL</th>
+                            <th>PLL</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {recentSolves.map((solve, index) => (
+                            <tr key={`${solve.finishedAt}-${index}`}>
+                              <td>{index + 1}</td>
+                              <td>{formatMs(solve.totalMs)}</td>
+                              <td>{formatMs(solve.crossMs)}</td>
+                              <td>{formatMs(solve.f2lMs)}</td>
+                              <td>{formatMs(solve.ollMs)}</td>
+                              <td>{formatMs(solve.pllMs)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              </article>
+            </section>
+          </section>
+        )}
 
-              <div className="action-row">
-                <button
-                  className="primary-button"
-                  onClick={randomTrainingCase}
-                  disabled={stage === "cross" && crossGenerated.loading}
-                >
-                  <Shuffle size={18} />
-                  {stage === "cross"
-                    ? crossGenerated.loading
-                      ? "Generating"
-                      : "New cross case"
-                    : "Random case"}
-                </button>
-              </div>
-            </>
-          )}
-        </aside>
-
-        <div className="main-column">
-          <CubeViewer
-            title={viewerTitle}
-            setup={viewerSetup}
-            alg={viewerAlg}
-            contextMoves={viewerContextMoves}
-            cubeOrientation={cubeOrientation}
-            liveMoves={smartCubeDisplayMoves}
-            guideSteps={setupGuideStepViews}
-            timerLabel={timerLabel}
-            isTimerRunning={timerRunning}
-            isLive={isLiveViewer}
-            gyroQuaternion={isLiveViewer ? smartCubeGyro : null}
-            gyroSession={smartCubeGyroSession}
-          />
-          {isFreeMode ? (
-            <FreePracticePanel
-              scramble={freeScrambleForOrientation}
-              inspectionEnabled={freeInspectionEnabled}
-              inspectionRunning={freeInspectionRunning}
-              inspectionRemainingMs={freeInspectionRemainingMs}
-              timerLabel={formatMs(timerElapsedMs)}
-              stepMarks={freeStepMarks}
-            />
-          ) : (
-            <AlgorithmCard
-              activeCase={activeCaseWithTrainingSetup}
-              cubeOrientation={cubeOrientation}
-            />
-          )}
-        </div>
-
-        <SmartCubePanel
-          onMove={handleSmartCubeMove}
-          onGyro={handleSmartCubeGyro}
-          onFacelets={handleSmartCubeFacelets}
-          onConnectionChange={handleSmartCubeConnectionChange}
-          onResetLiveState={handleSmartCubeResetLiveState}
-          cubeOrientation={cubeOrientation}
-          freeLastSolves={freeLastSolves}
-        />
       </section>
     </main>
   );
