@@ -299,6 +299,21 @@ function formatMs(ms: number): string {
   return `${seconds}.${hundredths.toString().padStart(2, "0")}`;
 }
 
+function simplifyAlgText(alg: string): string {
+  const normalized = splitAlgTokens(alg).join(" ");
+  if (!normalized) {
+    return "";
+  }
+  try {
+    return new Alg(normalized)
+      .experimentalSimplify({ cancel: true })
+      .toString()
+      .trim();
+  } catch {
+    return normalized;
+  }
+}
+
 function isSlotSolved(
   pattern: { patternData: Record<string, any> },
   solved: { patternData: Record<string, any> },
@@ -1412,10 +1427,12 @@ function App() {
     [cubeOrientation, liveSessionStartMoves],
   );
   const setupGuideAlg = useMemo(
-    () =>
-      smartCubeConnected
+    () => {
+      const raw = smartCubeConnected
         ? (sessionAwareSetupAlg ?? setupAlgForOrientation)
-        : setupAlgForOrientation,
+        : setupAlgForOrientation;
+      return simplifyAlgText(raw);
+    },
     [sessionAwareSetupAlg, setupAlgForOrientation, smartCubeConnected],
   );
   const isLiveViewer = smartCubeConnected;
@@ -1778,7 +1795,9 @@ function App() {
       liveSessionStartAlg.trim().length > 0
         ? new Alg(liveSessionStartAlg).invert().toString()
         : "";
-    setSessionAwareSetupAlg(joinAlgs([normalizeToSolved, setupAlgForOrientation]));
+    setSessionAwareSetupAlg(
+      simplifyAlgText(joinAlgs([normalizeToSolved, setupAlgForOrientation])),
+    );
   }, [liveSessionStartAlg, setupAlgForOrientation, smartCubeConnected, trainingSessionId]);
 
   useEffect(() => {
