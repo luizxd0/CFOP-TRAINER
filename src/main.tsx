@@ -94,6 +94,13 @@ type NavigatorWithWakeLock = Navigator & {
     request(type: "screen"): Promise<WakeLockSentinelLike>;
   };
 };
+type BeforeInstallPromptEvent = Event & {
+  prompt(): Promise<void>;
+  userChoice: Promise<{ outcome: "accepted" | "dismissed"; platform: string }>;
+};
+type NavigatorWithStandalone = Navigator & {
+  standalone?: boolean;
+};
 
 const FULL_STICKERING_MASK = "EDGES:------------,CORNERS:--------,CENTERS:------";
 const F2L_STICKERING_MASK_BY_ORIENTATION: Record<CubeOrientation, string> = {
@@ -103,6 +110,18 @@ const F2L_STICKERING_MASK_BY_ORIENTATION: Record<CubeOrientation, string> = {
 
 if (typeof window !== "undefined") {
   setTwistyDebug({ shareAllNewRenderers: "always" });
+}
+
+function isRunningAsInstalledApp(): boolean {
+  if (typeof window === "undefined") {
+    return false;
+  }
+  const navigatorWithStandalone = window.navigator as NavigatorWithStandalone;
+  return (
+    window.matchMedia("(display-mode: standalone)").matches ||
+    window.matchMedia("(display-mode: fullscreen)").matches ||
+    navigatorWithStandalone.standalone === true
+  );
 }
 
 function initialThemeMode(): ThemeMode {
@@ -2092,6 +2111,9 @@ function FreePracticePanel({
 function App() {
   const [themeMode, setThemeMode] = useState<ThemeMode>(initialThemeMode);
   const [view, setView] = useState<AppView>("training");
+  const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null);
+  const [installMessage, setInstallMessage] = useState("");
+  const [appInstalled, setAppInstalled] = useState(isRunningAsInstalledApp);
   const [mode, setMode] = useState<AppMode>("trainer");
   const [stage, setStage] = useState<Stage>("cross");
   const [learnStage, setLearnStage] = useState<LearnStage>("oll");
@@ -2177,6 +2199,31 @@ function App() {
       window.localStorage.setItem("cfopTheme", themeMode);
     }
   }, [themeMode]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const handleBeforeInstallPrompt = (event: Event) => {
+      event.preventDefault();
+      setInstallPrompt(event as BeforeInstallPromptEvent);
+      setInstallMessage("");
+    };
+    const handleAppInstalled = () => {
+      setAppInstalled(true);
+      setInstallPrompt(null);
+      setInstallMessage("Installed. Open it from your home screen next time.");
+    };
+
+    setAppInstalled(isRunningAsInstalledApp());
+    window.addEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
+    window.addEventListener("appinstalled", handleAppInstalled);
+    return () => {
+      window.removeEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
+      window.removeEventListener("appinstalled", handleAppInstalled);
+    };
+  }, []);
 
   useEffect(() => {
     if (cubeSkin === "f2l" && mirrorHintsEnabled) {
@@ -2801,6 +2848,27 @@ function App() {
     resetTrainingSessionFromCurrentState();
     setFreeScramble(generateRandomScramble());
   }, [resetTrainingSessionFromCurrentState]);
+
+  const handleInstallApp = useCallback(async () => {
+    if (appInstalled) {
+      setInstallMessage("Already installed. Open CFOP Trainer from your home screen.");
+      return;
+    }
+    if (installPrompt) {
+      await installPrompt.prompt();
+      const choice = await installPrompt.userChoice;
+      setInstallPrompt(null);
+      setInstallMessage(
+        choice.outcome === "accepted"
+          ? "Installing. Check your home screen or app drawer."
+          : "Install dismissed. You can try again from this button later.",
+      );
+      return;
+    }
+    setInstallMessage(
+      "On iPhone/iPad: tap Share, then Add to Home Screen. On Android: open the browser menu and tap Install app or Add to Home screen.",
+    );
+  }, [appInstalled, installPrompt]);
 
   const handleDifficultyChange = useCallback(
     (nextDifficulty: number | "all") => {
@@ -3949,7 +4017,11 @@ function App() {
                   <button className="ghost-button" onClick={() => setView("dashboard")}>
                     View dashboard
                   </button>
+                  <button className="ghost-button install-button" onClick={handleInstallApp}>
+                    {appInstalled ? "App installed" : "Add to home screen"}
+                  </button>
                 </div>
+                {installMessage && <p className="install-hint">{installMessage}</p>}
               </div>
               <div className="home-hero-stats">
                 <p>
