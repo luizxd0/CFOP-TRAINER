@@ -1812,14 +1812,50 @@ function App() {
       setSessionAwareSetupAlg(null);
       return;
     }
-    const normalizeToSolved =
-      liveSessionStartAlg.trim().length > 0
-        ? new Alg(liveSessionStartAlg).invert().toString()
-        : "";
-    setSessionAwareSetupAlg(
-      simplifyAlgText(joinAlgs([normalizeToSolved, setupAlgForOrientation])),
-    );
-  }, [liveSessionStartAlg, setupAlgForOrientation, smartCubeConnected, trainingSessionId]);
+    let cancelled = false;
+
+    const applyFallback = () => {
+      const normalizeToSolved =
+        liveSessionStartAlg.trim().length > 0
+          ? new Alg(liveSessionStartAlg).invert().toString()
+          : "";
+      setSessionAwareSetupAlg(
+        simplifyAlgText(joinAlgs([normalizeToSolved, setupAlgForOrientation])),
+      );
+    };
+
+    if (!cubeKpuzzle) {
+      applyFallback();
+      return;
+    }
+
+    const sessionStartPattern = cubeKpuzzle.defaultPattern().applyAlg(liveSessionStartAlg);
+    void experimentalSolve3x3x3IgnoringCenters(sessionStartPattern)
+      .then((solveToSolved) => {
+        if (cancelled) {
+          return;
+        }
+        setSessionAwareSetupAlg(
+          simplifyAlgText(joinAlgs([solveToSolved.toString(), setupAlgForOrientation])),
+        );
+      })
+      .catch(() => {
+        if (cancelled) {
+          return;
+        }
+        applyFallback();
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    cubeKpuzzle,
+    liveSessionStartAlg,
+    setupAlgForOrientation,
+    smartCubeConnected,
+    trainingSessionId,
+  ]);
 
   useEffect(() => {
     const nextSteps = buildGuideStepsFromAlg(setupGuideAlg);

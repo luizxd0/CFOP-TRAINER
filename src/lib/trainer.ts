@@ -22,6 +22,7 @@ export function moveCount(alg: string): number {
 }
 
 const AUF = ["", "U", "U'", "U2"];
+const NON_EMPTY_AUF = ["U", "U'", "U2"];
 
 function randomChoice<T>(items: T[]): T {
   return items[Math.floor(Math.random() * items.length)];
@@ -37,18 +38,18 @@ export function joinAlgs(parts: Array<string | null | undefined>): string {
 
 export function buildContextForStage(stage: Stage): string {
   const randomAuf = randomChoice(AUF);
-  const ollContext = randomChoice(casesForStage("oll")).setup;
-  const pllContext = randomChoice(casesForStage("pll")).setup;
+  const nonEmptyAuf = randomChoice(NON_EMPTY_AUF);
 
   switch (stage) {
     case "cross":
-      return joinAlgs([ollContext, pllContext, randomAuf]);
+      return "";
     case "f2l":
-      return joinAlgs([ollContext, pllContext, randomAuf]);
+      // Keep setup short while ensuring the case does not usually end solved.
+      return joinAlgs([nonEmptyAuf]);
     case "oll":
-      return joinAlgs([pllContext, randomAuf]);
+      return joinAlgs([nonEmptyAuf]);
     case "pll":
-      return joinAlgs([randomAuf]);
+      return joinAlgs([nonEmptyAuf ?? randomAuf]);
     default:
       return "";
   }
