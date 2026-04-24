@@ -1364,6 +1364,7 @@ function App() {
   const [cubeKpuzzle, setCubeKpuzzle] = useState<CubeKpuzzle | null>(null);
   const setupGuideCompleteRef = useRef(false);
   const prevSetupGuideCompleteRef = useRef(false);
+  const prevAttemptFinishedRef = useRef(false);
   const pendingFaceletsBootstrapRef = useRef(false);
   const pendingFaceletsValueRef = useRef<string | null>(null);
   const bootstrappingFaceletsRef = useRef(false);
@@ -2020,6 +2021,18 @@ function App() {
     setTimerStartAt(startedAt);
     setTimerRunning(true);
   }, [smartCubeConnected, setupGuideComplete, timerRunning, attemptFinished, movesAfterSetup]);
+
+  useEffect(() => {
+    const wasFinished = prevAttemptFinishedRef.current;
+    const justFinished = !wasFinished && attemptFinished;
+    prevAttemptFinishedRef.current = attemptFinished;
+    if (!justFinished || !smartCubeConnected) {
+      return;
+    }
+    // As soon as a case is solved, recompute setup from current physical state
+    // so the same selected case can be drilled repeatedly.
+    resetTrainingSessionFromCurrentState();
+  }, [attemptFinished, resetTrainingSessionFromCurrentState, smartCubeConnected]);
 
   useEffect(() => {
     if (!timerRunning || timerStartAt === null) {
