@@ -24,6 +24,7 @@ function isMacCacheProofEvent(e: SmartCubeEvent): boolean {
 }
 
 const MAC_VERIFY_TIMEOUT_MS = 10_000;
+const MAC_VERIFY_RETRY_TIMEOUT_MS = 15_000;
 
 /**
  * After we subscribe for MAC proof, ask the cube for a fresh report. Init often emits
@@ -193,6 +194,7 @@ export async function connectSmartCube(
         throw e;
     }
     if (conn.deviceMAC) {
+        let verified = false;
         opts.onStatus?.('Verifying connection…');
         try {
             const verifyPromise = waitForVerifiedCubeEvent(
@@ -202,27 +204,52 @@ export async function connectSmartCube(
             );
             requestFreshStateForMacVerify(conn);
             await verifyPromise;
+            verified = true;
         } catch (e) {
             const aborted = e instanceof DOMException && e.name === 'AbortError';
-            if (!aborted) {
-                removeCachedMacForDevice(device);
-            }
-            try {
-                device.gatt?.disconnect();
-            } catch {
-                /* ignore */
-            }
             if (aborted) {
+                try {
+                    device.gatt?.disconnect();
+                } catch {
+                    /* ignore */
+                }
                 throw e;
             }
             if (e instanceof TimeoutError) {
-                throw new Error(
-                    'Timed out waiting for cube data. Check the Bluetooth MAC address and try again.'
-                );
+                // Some devices only emit first proof packet after a physical turn.
+                opts.onStatus?.('Waiting for first cube packet… turn one face to confirm connection');
+                try {
+                    await waitForVerifiedCubeEvent(conn, MAC_VERIFY_RETRY_TIMEOUT_MS, opts.signal);
+                    verified = true;
+                } catch (retryError) {
+                    const retryAborted =
+                        retryError instanceof DOMException && retryError.name === 'AbortError';
+                    if (retryAborted) {
+                        try {
+                            device.gatt?.disconnect();
+                        } catch {
+                            /* ignore */
+                        }
+                        throw retryError;
+                    }
+                    // Keep connection alive; avoid persisting possibly wrong MAC when proof was not observed.
+                    removeCachedMacForDevice(device);
+                    opts.onStatus?.('Connected (verification timed out; data may appear after first move)');
+                    return conn;
+                }
+            } else {
+                removeCachedMacForDevice(device);
+                try {
+                    device.gatt?.disconnect();
+                } catch {
+                    /* ignore */
+                }
+                throw e;
             }
-            throw e;
         }
-        setCachedMacForDevice(device, conn.deviceMAC);
+        if (verified) {
+            setCachedMacForDevice(device, conn.deviceMAC);
+        }
     }
     return conn;
 }
