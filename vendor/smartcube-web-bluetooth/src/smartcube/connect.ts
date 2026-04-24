@@ -17,10 +17,10 @@ import { getRegisteredProtocols } from './protocol';
  * event-type checks are insufficient. A legal 3×3 state requires consistent sticker counts + geometry.
  */
 function isMacCacheProofEvent(e: SmartCubeEvent): boolean {
-    if (e.type !== 'FACELETS') {
-        return false;
+    if (e.type === 'FACELETS') {
+        return new CubieCube().fromFacelet(e.facelets) !== -1;
     }
-    return new CubieCube().fromFacelet(e.facelets) !== -1;
+    return e.type === 'MOVE' && e.move.trim().length > 0;
 }
 
 const MAC_VERIFY_TIMEOUT_MS = 10_000;
@@ -33,13 +33,19 @@ const MAC_VERIFY_TIMEOUT_MS = 10_000;
  */
 function requestFreshStateForMacVerify(conn: SmartCubeConnection): void {
     const c = conn.capabilities;
-    const p: Promise<void> = c.facelets
-        ? conn.sendCommand({ type: 'REQUEST_FACELETS' })
-        : c.hardware
-          ? conn.sendCommand({ type: 'REQUEST_HARDWARE' })
-          : c.battery
-            ? conn.sendCommand({ type: 'REQUEST_BATTERY' })
-            : Promise.resolve();
+    const requests: Promise<void>[] = [];
+    if (c.facelets) {
+        requests.push(conn.sendCommand({ type: 'REQUEST_FACELETS' }));
+    }
+    if (c.hardware) {
+        requests.push(conn.sendCommand({ type: 'REQUEST_HARDWARE' }));
+    }
+    if (c.battery) {
+        requests.push(conn.sendCommand({ type: 'REQUEST_BATTERY' }));
+    }
+    const p: Promise<void> = requests.length
+        ? Promise.allSettled(requests).then(() => undefined)
+        : Promise.resolve();
     p.catch(() => {});
 }
 
@@ -201,24 +207,20 @@ export async function connectSmartCube(
             if (!aborted) {
                 removeCachedMacForDevice(device);
             }
+            try {
+                device.gatt?.disconnect();
+            } catch {
+                /* ignore */
+            }
             if (aborted) {
-                try {
-                    device.gatt?.disconnect();
-                } catch {
-                    /* ignore */
-                }
                 throw e;
             }
             if (e instanceof TimeoutError) {
-                opts.onStatus?.('Connected (verification timed out; waiting for cube data)…');
-            } else {
-                try {
-                    device.gatt?.disconnect();
-                } catch {
-                    /* ignore */
-                }
-                throw e;
+                throw new Error(
+                    'Timed out waiting for cube data. Check the Bluetooth MAC address and try again.'
+                );
             }
+            throw e;
         }
         setCachedMacForDevice(device, conn.deviceMAC);
     }
