@@ -341,6 +341,70 @@ function simplifyAlgText(alg: string): string {
   }
 }
 
+type FaceLetter = "U" | "D" | "R" | "L" | "F" | "B";
+type FaceMap = Record<FaceLetter, FaceLetter>;
+const IDENTITY_FACE_MAP: FaceMap = {
+  U: "U",
+  D: "D",
+  R: "R",
+  L: "L",
+  F: "F",
+  B: "B",
+};
+const ROT_STEP_LOCAL_TO_PREV: Record<"x" | "y" | "z", FaceMap> = {
+  x: { U: "B", B: "D", D: "F", F: "U", R: "R", L: "L" },
+  y: { F: "R", R: "B", B: "L", L: "F", U: "U", D: "D" },
+  z: { U: "L", L: "D", D: "R", R: "U", F: "F", B: "B" },
+};
+
+function applyRotationStep(faceMap: FaceMap, axis: "x" | "y" | "z"): FaceMap {
+  const step = ROT_STEP_LOCAL_TO_PREV[axis];
+  return {
+    U: faceMap[step.U],
+    D: faceMap[step.D],
+    R: faceMap[step.R],
+    L: faceMap[step.L],
+    F: faceMap[step.F],
+    B: faceMap[step.B],
+  };
+}
+
+function stripCubeRotations(alg: string): string {
+  const tokens = splitAlgTokens(alg);
+  if (tokens.length === 0) {
+    return "";
+  }
+  let faceMap: FaceMap = { ...IDENTITY_FACE_MAP };
+  const out: string[] = [];
+  for (const token of tokens) {
+    try {
+      const move = Move.fromString(token);
+      const family = move.family;
+      const head = family[0];
+      const lowerHead = head.toLowerCase();
+      if (family.length === 1 && (lowerHead === "x" || lowerHead === "y" || lowerHead === "z")) {
+        const turns = ((move.amount % 4) + 4) % 4;
+        for (let i = 0; i < turns; i += 1) {
+          faceMap = applyRotationStep(faceMap, lowerHead as "x" | "y" | "z");
+        }
+        continue;
+      }
+
+      const upperHead = head.toUpperCase() as FaceLetter;
+      if (FACE_VECTOR_BY_FACE[upperHead]) {
+        const mappedUpper = faceMap[upperHead];
+        const mappedHead = head === head.toLowerCase() ? mappedUpper.toLowerCase() : mappedUpper;
+        out.push(move.modified({ family: `${mappedHead}${family.slice(1)}` }).toString());
+      } else {
+        out.push(move.toString());
+      }
+    } catch {
+      out.push(token);
+    }
+  }
+  return simplifyAlgText(out.join(" "));
+}
+
 function isSlotSolved(
   pattern: { patternData: Record<string, any> },
   solved: { patternData: Record<string, any> },
@@ -1759,7 +1823,7 @@ function App() {
     bootstrappingFaceletsRef.current = true;
     void experimentalSolve3x3x3IgnoringCenters(pattern)
       .then((solveToSolved) => {
-        const fromSolved = new Alg(solveToSolved.toString()).invert().toString();
+        const fromSolved = new Alg(stripCubeRotations(solveToSolved.toString())).invert().toString();
         const nextMoves = splitAlgTokens(fromSolved).slice(-500);
         setSmartCubeMoves(nextMoves);
         smartCubeMovesRef.current = nextMoves;
@@ -1975,7 +2039,9 @@ function App() {
           return;
         }
         setSessionAwareSetupAlg(
-          simplifyAlgText(joinAlgs([solveToSolved.toString(), setupAlgForOrientation])),
+          simplifyAlgText(
+            joinAlgs([stripCubeRotations(solveToSolved.toString()), setupAlgForOrientation]),
+          ),
         );
       })
       .catch(() => {
