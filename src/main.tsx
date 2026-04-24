@@ -16,6 +16,9 @@ import {
   Sun,
   TimerReset,
 } from "lucide-react";
+import { Alg } from "cubing/alg";
+import { KPattern } from "cubing/kpuzzle";
+import { experimentalSolve3x3x3IgnoringCenters } from "cubing/search";
 import { randomScrambleForEvent } from "cubing/scramble";
 import { cube3x3x3 } from "cubing/puzzles";
 import { TwistyPlayer } from "cubing/twisty";
@@ -24,6 +27,7 @@ import {
   type MacAddressProvider,
   type SmartCubeConnection,
 } from "smartcube-web-bluetooth";
+import { CubieCube } from "../vendor/smartcube-web-bluetooth/src/smartcube/cubie-cube";
 import {
   buildContextForStage,
   casesForStage,
@@ -39,6 +43,7 @@ import "./styles.css";
 type CubeOrientation = "yellow-top" | "white-top";
 type ThemeMode = "light" | "dark";
 type GyroQuaternion = { x: number; y: number; z: number; w: number };
+type CubeKpuzzle = Awaited<ReturnType<typeof cube3x3x3.kpuzzle>>;
 type WakeLockSentinelLike = {
   released: boolean;
   release(): Promise<void>;
@@ -140,6 +145,8 @@ type GuideStepInternal = {
 
 type OrbitSlot = { orbit: string; index: number };
 const CROSS_EDGE_SLOTS = [4, 5, 6, 7] as const;
+const F2L_EDGE_SLOTS = [8, 9, 10, 11] as const;
+const F2L_CORNER_SLOTS = [4, 5, 6, 7] as const;
 
 function splitAlgTokens(alg: string): string[] {
   return alg
@@ -351,6 +358,56 @@ function isCrossSolved(
   solved: { patternData: Record<string, any> },
 ): boolean {
   return CROSS_EDGE_SLOTS.every((index) => isSlotSolved(pattern, solved, "EDGES", index));
+}
+
+function isF2LSolved(
+  pattern: { patternData: Record<string, any> },
+  solved: { patternData: Record<string, any> },
+): boolean {
+  return (
+    isCrossSolved(pattern, solved) &&
+    F2L_EDGE_SLOTS.every((index) => isSlotSolved(pattern, solved, "EDGES", index)) &&
+    F2L_CORNER_SLOTS.every((index) => isSlotSolved(pattern, solved, "CORNERS", index))
+  );
+}
+
+function isOllSolved(
+  pattern: { patternData: Record<string, any> },
+  solved: { patternData: Record<string, any> },
+): boolean {
+  const edges = pattern.patternData?.EDGES?.orientation;
+  const corners = pattern.patternData?.CORNERS?.orientation;
+  if (!Array.isArray(edges) || !Array.isArray(corners)) {
+    return false;
+  }
+  return (
+    isF2LSolved(pattern, solved) &&
+    edges.every((value) => value === 0) &&
+    corners.every((value) => value === 0)
+  );
+}
+
+function patternFromFacelets(facelets: string, kpuzzle: CubeKpuzzle): KPattern | null {
+  const parsed = new CubieCube().fromFacelet(facelets);
+  if (parsed === -1) {
+    return null;
+  }
+  const cubie = parsed as CubieCube;
+  return new KPattern(kpuzzle, {
+    EDGES: {
+      pieces: cubie.ea.map((entry) => entry >> 1),
+      orientation: cubie.ea.map((entry) => entry & 1),
+    },
+    CORNERS: {
+      pieces: cubie.ca.map((entry) => entry & 7),
+      orientation: cubie.ca.map((entry) => entry >> 3),
+    },
+    CENTERS: {
+      pieces: [0, 1, 2, 3, 4, 5],
+      orientation: [0, 0, 0, 0, 0, 0],
+      orientationMod: [1, 1, 1, 1, 1, 1],
+    },
+  });
 }
 
 function normalizeQuaternion(q: GyroQuaternion): GyroQuaternion | null {
@@ -673,12 +730,14 @@ function CubeViewer({
 function SmartCubePanel({
   onMove,
   onGyro,
+  onFacelets,
   onConnectionChange,
   onResetLiveState,
   cubeOrientation,
 }: {
   onMove?: (move: { raw: string; display: string }) => void;
   onGyro?: (quaternion: GyroQuaternion | null) => void;
+  onFacelets?: (facelets: string) => void;
   onConnectionChange?: (connected: boolean) => void;
   onResetLiveState?: () => void;
   cubeOrientation: CubeOrientation;
@@ -717,6 +776,14 @@ function SmartCubePanel({
       }
     },
     [onGyro],
+  );
+  const emitFacelets = useCallback(
+    (facelets: string) => {
+      if (typeof onFacelets === "function") {
+        onFacelets(facelets);
+      }
+    },
+    [onFacelets],
   );
   const emitConnectionChange = useCallback(
     (connected: boolean) => {
@@ -835,6 +902,9 @@ function SmartCubePanel({
               display: remapMoveForPerspective(orientedMove, gyroRelativeForMovesRef.current),
             });
           }
+          break;
+        case "FACELETS":
+          emitFacelets(event.facelets);
           break;
         case "GYRO":
           {
@@ -1158,18 +1228,27 @@ function App() {
     useState<CubeOrientation>("yellow-top");
   const [smartCubeConnected, setSmartCubeConnected] = useState(false);
   const [smartCubeMoves, setSmartCubeMoves] = useState<string[]>([]);
+  const smartCubeMovesRef = useRef<string[]>([]);
   const [smartCubeDisplayMoves, setSmartCubeDisplayMoves] = useState<string[]>([]);
+  const [liveSessionMoveCount, setLiveSessionMoveCount] = useState(0);
+  const [liveSessionStartMoves, setLiveSessionStartMoves] = useState<string[]>([]);
+  const [trainingSessionId, setTrainingSessionId] = useState(0);
+  const [sessionAwareSetupAlg, setSessionAwareSetupAlg] = useState<string | null>(null);
   const [smartCubeGyro, setSmartCubeGyro] = useState<GyroQuaternion | null>(null);
   const [smartCubeGyroSession, setSmartCubeGyroSession] = useState(0);
   const [setupGuideSteps, setSetupGuideSteps] = useState<GuideStepInternal[]>([]);
   const [setupGuideComplete, setSetupGuideComplete] = useState(false);
   const [movesAfterSetup, setMovesAfterSetup] = useState(0);
+  const [attemptFinished, setAttemptFinished] = useState(false);
   const [timerRunning, setTimerRunning] = useState(false);
   const [timerStartAt, setTimerStartAt] = useState<number | null>(null);
   const [timerElapsedMs, setTimerElapsedMs] = useState(0);
-  const [cubeKpuzzle, setCubeKpuzzle] =
-    useState<Awaited<ReturnType<typeof cube3x3x3.kpuzzle>> | null>(null);
+  const [cubeKpuzzle, setCubeKpuzzle] = useState<CubeKpuzzle | null>(null);
   const setupGuideCompleteRef = useRef(false);
+  const prevSetupGuideCompleteRef = useRef(false);
+  const pendingFaceletsBootstrapRef = useRef(false);
+  const pendingFaceletsValueRef = useRef<string | null>(null);
+  const bootstrappingFaceletsRef = useRef(false);
   const [difficulty, setDifficulty] = useState<number | "all">(1);
   const [selectedCaseId, setSelectedCaseId] = useState("cross-1");
   const [contextAlg, setContextAlg] = useState("");
@@ -1197,6 +1276,10 @@ function App() {
       window.localStorage.setItem("cfopTheme", themeMode);
     }
   }, [themeMode]);
+
+  useEffect(() => {
+    smartCubeMovesRef.current = smartCubeMoves;
+  }, [smartCubeMoves]);
 
   useEffect(() => {
     if (typeof window === "undefined" || typeof document === "undefined") {
@@ -1325,12 +1408,26 @@ function App() {
     () => smartCubeMoves.map((move) => remapMoveForOrientation(move, cubeOrientation)).join(" "),
     [cubeOrientation, smartCubeMoves],
   );
+  const liveSessionStartAlg = useMemo(
+    () =>
+      liveSessionStartMoves
+        .map((move) => remapMoveForOrientation(move, cubeOrientation))
+        .join(" "),
+    [cubeOrientation, liveSessionStartMoves],
+  );
+  const setupGuideAlg = useMemo(
+    () =>
+      smartCubeConnected
+        ? (sessionAwareSetupAlg ?? setupAlgForOrientation)
+        : setupAlgForOrientation,
+    [sessionAwareSetupAlg, setupAlgForOrientation, smartCubeConnected],
+  );
   const isLiveViewer = smartCubeConnected;
   const viewerTitle = isLiveViewer ? "Live Smart Cube" : activeCaseWithTrainingSetup.name;
   // In live mode we must use setup (not alg) so the cube shows current state immediately.
   const viewerSetup = isLiveViewer ? smartCubeAlg : activeCaseWithTrainingSetup.setup;
   const viewerAlg = isLiveViewer ? "" : solution;
-  const viewerContextMoves = isLiveViewer ? smartCubeMoves.length : moveCount(contextAlg);
+  const viewerContextMoves = isLiveViewer ? liveSessionMoveCount : moveCount(contextAlg);
   const setupGuideStepViews = useMemo(
     () => {
       const full = setupGuideSteps.map(guideStepView);
@@ -1350,20 +1447,27 @@ function App() {
     () => (cubeKpuzzle ? cubeKpuzzle.defaultPattern().applyAlg(smartCubeAlg) : null),
     [cubeKpuzzle, smartCubeAlg],
   );
+  const sessionStartPattern = useMemo(
+    () =>
+      cubeKpuzzle
+        ? cubeKpuzzle.defaultPattern().applyAlg(smartCubeConnected ? liveSessionStartAlg : "")
+        : null,
+    [cubeKpuzzle, liveSessionStartAlg, smartCubeConnected],
+  );
   const solvedPattern = useMemo(
     () => (cubeKpuzzle ? cubeKpuzzle.defaultPattern() : null),
     [cubeKpuzzle],
   );
   const setupTargetPattern = useMemo(
-    () => (cubeKpuzzle ? cubeKpuzzle.defaultPattern().applyAlg(setupAlgForOrientation) : null),
-    [cubeKpuzzle, setupAlgForOrientation],
+    () => (sessionStartPattern ? sessionStartPattern.applyAlg(setupGuideAlg) : null),
+    [sessionStartPattern, setupGuideAlg],
   );
   const solvedTargetPattern = useMemo(
     () =>
-      cubeKpuzzle
-        ? cubeKpuzzle.defaultPattern().applyAlg(joinAlgs([setupAlgForOrientation, solutionAlgForOrientation]))
+      setupTargetPattern
+        ? setupTargetPattern.applyAlg(solutionAlgForOrientation)
         : null,
-    [cubeKpuzzle, setupAlgForOrientation, solutionAlgForOrientation],
+    [setupTargetPattern, solutionAlgForOrientation],
   );
   const requiredSolvedSlots = useMemo(() => {
     if (!setupTargetPattern || !solvedTargetPattern || !solvedPattern) {
@@ -1378,6 +1482,7 @@ function App() {
 
   const handleSmartCubeMove = useCallback((move: { raw: string; display: string }) => {
     setSmartCubeMoves((current) => [...current, move.raw].slice(-500));
+    setLiveSessionMoveCount((current) => current + 1);
     setSmartCubeDisplayMoves((current) =>
       current.length >= 19 ? [move.display] : [...current, move.display],
     );
@@ -1452,48 +1557,129 @@ function App() {
     setSmartCubeGyro(quaternion);
   }, []);
 
-  const resetLiveMoveHistory = useCallback(() => {
+  const hardResetLiveCubeState = useCallback(() => {
     setSmartCubeMoves([]);
+    smartCubeMovesRef.current = [];
+    setLiveSessionStartMoves([]);
+    setLiveSessionMoveCount(0);
     setSmartCubeDisplayMoves([]);
+    setSessionAwareSetupAlg(null);
+    setTrainingSessionId((current) => current + 1);
+    setSetupGuideComplete(false);
+    setupGuideCompleteRef.current = false;
+    prevSetupGuideCompleteRef.current = false;
+    setMovesAfterSetup(0);
+    setAttemptFinished(false);
+    setTimerRunning(false);
+    setTimerStartAt(null);
+    setTimerElapsedMs(0);
   }, []);
+
+  const resetTrainingSessionFromCurrentState = useCallback(() => {
+    const currentMoves = [...smartCubeMovesRef.current];
+    setLiveSessionStartMoves(currentMoves);
+    setLiveSessionMoveCount(0);
+    setSmartCubeDisplayMoves([]);
+    setSessionAwareSetupAlg(null);
+    setTrainingSessionId((current) => current + 1);
+    setSetupGuideComplete(false);
+    setupGuideCompleteRef.current = false;
+    prevSetupGuideCompleteRef.current = false;
+    setMovesAfterSetup(0);
+    setAttemptFinished(false);
+    setTimerRunning(false);
+    setTimerStartAt(null);
+    setTimerElapsedMs(0);
+  }, []);
+
+  const attemptFaceletsBootstrap = useCallback(() => {
+    if (
+      !smartCubeConnected ||
+      !pendingFaceletsBootstrapRef.current ||
+      bootstrappingFaceletsRef.current ||
+      !cubeKpuzzle
+    ) {
+      return;
+    }
+    const facelets = pendingFaceletsValueRef.current;
+    if (!facelets) {
+      return;
+    }
+    const pattern = patternFromFacelets(facelets, cubeKpuzzle);
+    if (!pattern) {
+      return;
+    }
+    bootstrappingFaceletsRef.current = true;
+    void experimentalSolve3x3x3IgnoringCenters(pattern)
+      .then((solveToSolved) => {
+        const fromSolved = new Alg(solveToSolved.toString()).invert().toString();
+        const nextMoves = splitAlgTokens(fromSolved).slice(-500);
+        setSmartCubeMoves(nextMoves);
+        smartCubeMovesRef.current = nextMoves;
+        setLiveSessionStartMoves([...nextMoves]);
+        setLiveSessionMoveCount(0);
+        setSmartCubeDisplayMoves([]);
+        setSessionAwareSetupAlg(null);
+        setTrainingSessionId((current) => current + 1);
+        setSetupGuideComplete(false);
+        setupGuideCompleteRef.current = false;
+        prevSetupGuideCompleteRef.current = false;
+        setMovesAfterSetup(0);
+        setAttemptFinished(false);
+        setTimerRunning(false);
+        setTimerStartAt(null);
+        setTimerElapsedMs(0);
+      })
+      .catch(() => {
+        // Ignore bootstrap errors and keep move-based tracking.
+      })
+      .finally(() => {
+        pendingFaceletsBootstrapRef.current = false;
+        bootstrappingFaceletsRef.current = false;
+      });
+  }, [cubeKpuzzle, smartCubeConnected]);
+
+  const handleSmartCubeFacelets = useCallback((facelets: string) => {
+    pendingFaceletsValueRef.current = facelets;
+    attemptFaceletsBootstrap();
+  }, [attemptFaceletsBootstrap]);
+
+  useEffect(() => {
+    attemptFaceletsBootstrap();
+  }, [attemptFaceletsBootstrap, cubeKpuzzle]);
 
   const handleSmartCubeConnectionChange = useCallback((connected: boolean) => {
     setSmartCubeConnected(connected);
     if (connected) {
+      pendingFaceletsBootstrapRef.current = true;
+      pendingFaceletsValueRef.current = null;
       setSmartCubeGyroSession((current) => current + 1);
-    } else {
-      setSmartCubeGyro(null);
-      resetLiveMoveHistory();
-      setSetupGuideComplete(false);
-      setupGuideCompleteRef.current = false;
-      setMovesAfterSetup(0);
-      setTimerRunning(false);
-      setTimerStartAt(null);
-      setTimerElapsedMs(0);
+      hardResetLiveCubeState();
+      return;
     }
-  }, [resetLiveMoveHistory]);
+    pendingFaceletsBootstrapRef.current = false;
+    pendingFaceletsValueRef.current = null;
+    setSmartCubeGyro(null);
+    hardResetLiveCubeState();
+  }, [hardResetLiveCubeState]);
 
   const handleSmartCubeResetLiveState = useCallback(() => {
-    resetLiveMoveHistory();
+    pendingFaceletsBootstrapRef.current = false;
+    pendingFaceletsValueRef.current = null;
+    hardResetLiveCubeState();
     setSmartCubeGyro(null);
     setSmartCubeGyroSession((current) => current + 1);
-    setSetupGuideComplete(false);
-    setupGuideCompleteRef.current = false;
-    setMovesAfterSetup(0);
-    setTimerRunning(false);
-    setTimerStartAt(null);
-    setTimerElapsedMs(0);
-  }, [resetLiveMoveHistory]);
+  }, [hardResetLiveCubeState]);
 
   const handleStageChange = useCallback(
     (nextStage: Stage) => {
       if (nextStage === stage) {
         return;
       }
-      resetLiveMoveHistory();
+      resetTrainingSessionFromCurrentState();
       setStage(nextStage);
     },
-    [resetLiveMoveHistory, stage],
+    [resetTrainingSessionFromCurrentState, stage],
   );
 
   const handleDifficultyChange = useCallback(
@@ -1501,10 +1687,10 @@ function App() {
       if (nextDifficulty === difficulty) {
         return;
       }
-      resetLiveMoveHistory();
+      resetTrainingSessionFromCurrentState();
       setDifficulty(nextDifficulty);
     },
-    [difficulty, resetLiveMoveHistory],
+    [difficulty, resetTrainingSessionFromCurrentState],
   );
 
   const handleCaseChange = useCallback(
@@ -1512,10 +1698,10 @@ function App() {
       if (nextCaseId === selectedCaseId) {
         return;
       }
-      resetLiveMoveHistory();
+      resetTrainingSessionFromCurrentState();
       setSelectedCaseId(nextCaseId);
     },
-    [resetLiveMoveHistory, selectedCaseId],
+    [resetTrainingSessionFromCurrentState, selectedCaseId],
   );
 
   useEffect(() => {
@@ -1595,16 +1781,42 @@ function App() {
   }, []);
 
   useEffect(() => {
-    const nextSteps = buildGuideStepsFromAlg(setupAlgForOrientation);
+    if (!smartCubeConnected || !sessionStartPattern) {
+      setSessionAwareSetupAlg(null);
+      return;
+    }
+    let cancelled = false;
+    void experimentalSolve3x3x3IgnoringCenters(sessionStartPattern)
+      .then((solveToSolved) => {
+        if (cancelled) {
+          return;
+        }
+        setSessionAwareSetupAlg(joinAlgs([solveToSolved.toString(), setupAlgForOrientation]));
+      })
+      .catch(() => {
+        if (cancelled) {
+          return;
+        }
+        setSessionAwareSetupAlg(setupAlgForOrientation);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionStartPattern, setupAlgForOrientation, smartCubeConnected, trainingSessionId]);
+
+  useEffect(() => {
+    const nextSteps = buildGuideStepsFromAlg(setupGuideAlg);
     setSetupGuideSteps(nextSteps);
     const complete = nextSteps.length === 0;
     setSetupGuideComplete(complete);
     setupGuideCompleteRef.current = complete;
+    prevSetupGuideCompleteRef.current = complete;
     setMovesAfterSetup(0);
+    setAttemptFinished(false);
     setTimerRunning(false);
     setTimerStartAt(null);
     setTimerElapsedMs(0);
-  }, [setupAlgForOrientation, smartCubeGyroSession]);
+  }, [setupGuideAlg, smartCubeGyroSession, trainingSessionId]);
 
   useEffect(() => {
     const complete =
@@ -1613,6 +1825,17 @@ function App() {
     setSetupGuideComplete(complete);
     setupGuideCompleteRef.current = complete;
   }, [setupGuideSteps]);
+
+  useEffect(() => {
+    const wasComplete = prevSetupGuideCompleteRef.current;
+    if (!wasComplete && setupGuideComplete) {
+      // Start counting live turns for the attempt only after setup is done.
+      setLiveSessionMoveCount(0);
+      setMovesAfterSetup(0);
+      setAttemptFinished(false);
+    }
+    prevSetupGuideCompleteRef.current = setupGuideComplete;
+  }, [setupGuideComplete]);
 
   useEffect(() => {
     if (
@@ -1627,13 +1850,19 @@ function App() {
   }, [setupGuideComplete, currentLivePattern, setupTargetPattern]);
 
   useEffect(() => {
-    if (!smartCubeConnected || !setupGuideComplete || timerRunning || movesAfterSetup === 0) {
+    if (
+      !smartCubeConnected ||
+      !setupGuideComplete ||
+      timerRunning ||
+      attemptFinished ||
+      movesAfterSetup === 0
+    ) {
       return;
     }
     const startedAt = performance.now();
     setTimerStartAt(startedAt);
     setTimerRunning(true);
-  }, [smartCubeConnected, setupGuideComplete, timerRunning, movesAfterSetup]);
+  }, [smartCubeConnected, setupGuideComplete, timerRunning, attemptFinished, movesAfterSetup]);
 
   useEffect(() => {
     if (!timerRunning || timerStartAt === null) {
@@ -1659,6 +1888,24 @@ function App() {
         currentLivePattern as unknown as { patternData: Record<string, any> },
         solvedPattern as unknown as { patternData: Record<string, any> },
       );
+    const f2lGoalMatch =
+      stage === "f2l" &&
+      solvedPattern &&
+      isF2LSolved(
+        currentLivePattern as unknown as { patternData: Record<string, any> },
+        solvedPattern as unknown as { patternData: Record<string, any> },
+      );
+    const ollGoalMatch =
+      stage === "oll" &&
+      solvedPattern &&
+      isOllSolved(
+        currentLivePattern as unknown as { patternData: Record<string, any> },
+        solvedPattern as unknown as { patternData: Record<string, any> },
+      );
+    const pllGoalMatch =
+      stage === "pll" &&
+      solvedPattern &&
+      currentLivePattern.isIdentical(solvedPattern);
     const stageGoalMatch =
       stage !== "cross" &&
       requiredSolvedSlots.length > 0 &&
@@ -1668,8 +1915,9 @@ function App() {
         solvedPattern as unknown as { patternData: Record<string, any> },
         requiredSolvedSlots,
       );
-    if (exactMatch || crossGoalMatch || stageGoalMatch) {
+    if (exactMatch || crossGoalMatch || f2lGoalMatch || ollGoalMatch || pllGoalMatch || stageGoalMatch) {
       setTimerRunning(false);
+      setAttemptFinished(true);
       if (timerStartAt !== null) {
         setTimerElapsedMs(performance.now() - timerStartAt);
       }
@@ -1695,7 +1943,7 @@ function App() {
   }
 
   function randomTrainingCase() {
-    resetLiveMoveHistory();
+    resetTrainingSessionFromCurrentState();
     if (stage === "cross") {
       setCrossRefresh((value) => value + 1);
       return;
@@ -1859,6 +2107,7 @@ function App() {
         <SmartCubePanel
           onMove={handleSmartCubeMove}
           onGyro={handleSmartCubeGyro}
+          onFacelets={handleSmartCubeFacelets}
           onConnectionChange={handleSmartCubeConnectionChange}
           onResetLiveState={handleSmartCubeResetLiveState}
           cubeOrientation={cubeOrientation}
