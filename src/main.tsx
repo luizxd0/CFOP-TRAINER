@@ -1039,7 +1039,57 @@ function SmartCubePanel({
     }
     if (conn.capabilities.facelets) {
       void conn.sendCommand({ type: "REQUEST_FACELETS" });
+      void syncInitialCubeState(conn);
     }
+  }
+
+  function waitForFaceletsEvent(conn: SmartCubeConnection, timeoutMs: number): Promise<boolean> {
+    return new Promise((resolve) => {
+      let settled = false;
+      let timer: number | null = null;
+      const finish = (result: boolean) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        if (timer !== null) {
+          window.clearTimeout(timer);
+        }
+        sub.unsubscribe();
+        resolve(result);
+      };
+
+      const sub = conn.events$.subscribe((event) => {
+        if (event.type === "FACELETS") {
+          finish(true);
+          return;
+        }
+        if (event.type === "DISCONNECT") {
+          finish(false);
+        }
+      });
+
+      timer = window.setTimeout(() => finish(false), timeoutMs);
+    });
+  }
+
+  async function syncInitialCubeState(conn: SmartCubeConnection): Promise<void> {
+    if (!conn.capabilities.facelets) {
+      return;
+    }
+    // Some cubes can miss the first state packet right after pairing; retry a few requests.
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      try {
+        await conn.sendCommand({ type: "REQUEST_FACELETS" });
+      } catch {
+        // Keep trying; protocol drivers may transiently reject writes while settling.
+      }
+      const received = await waitForFaceletsEvent(conn, 900 + attempt * 350);
+      if (received) {
+        return;
+      }
+    }
+    setStatus("Connected, but initial cube state is pending. Turn one face to force sync.");
   }
 
   async function connectUsingSmartCubeApi() {
