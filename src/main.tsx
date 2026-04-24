@@ -5,7 +5,6 @@ import {
   Bluetooth,
   BookOpen,
   CheckCircle2,
-  ChevronRight,
   Eye,
   EyeOff,
   ListRestart,
@@ -19,7 +18,6 @@ import {
 import { Alg } from "cubing/alg";
 import { KPattern } from "cubing/kpuzzle";
 import { experimentalSolve3x3x3IgnoringCenters } from "cubing/search";
-import { randomScrambleForEvent } from "cubing/scramble";
 import { cube3x3x3 } from "cubing/puzzles";
 import { TwistyPlayer } from "cubing/twisty";
 import {
@@ -1264,8 +1262,6 @@ function App() {
     loading: false,
     error: null,
   });
-  const [scramble, setScramble] = useState("R U R' U' F R U R' U' F'");
-  const [isLoadingScramble, setIsLoadingScramble] = useState(false);
   const shouldKeepScreenAwake = smartCubeConnected || timerRunning;
 
   useEffect(() => {
@@ -1447,20 +1443,13 @@ function App() {
     () => (cubeKpuzzle ? cubeKpuzzle.defaultPattern().applyAlg(smartCubeAlg) : null),
     [cubeKpuzzle, smartCubeAlg],
   );
-  const sessionStartPattern = useMemo(
-    () =>
-      cubeKpuzzle
-        ? cubeKpuzzle.defaultPattern().applyAlg(smartCubeConnected ? liveSessionStartAlg : "")
-        : null,
-    [cubeKpuzzle, liveSessionStartAlg, smartCubeConnected],
-  );
   const solvedPattern = useMemo(
     () => (cubeKpuzzle ? cubeKpuzzle.defaultPattern() : null),
     [cubeKpuzzle],
   );
   const setupTargetPattern = useMemo(
-    () => (sessionStartPattern ? sessionStartPattern.applyAlg(setupGuideAlg) : null),
-    [sessionStartPattern, setupGuideAlg],
+    () => (cubeKpuzzle ? cubeKpuzzle.defaultPattern().applyAlg(setupAlgForOrientation) : null),
+    [cubeKpuzzle, setupAlgForOrientation],
   );
   const solvedTargetPattern = useMemo(
     () =>
@@ -1781,28 +1770,16 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (!smartCubeConnected || !sessionStartPattern) {
+    if (!smartCubeConnected) {
       setSessionAwareSetupAlg(null);
       return;
     }
-    let cancelled = false;
-    void experimentalSolve3x3x3IgnoringCenters(sessionStartPattern)
-      .then((solveToSolved) => {
-        if (cancelled) {
-          return;
-        }
-        setSessionAwareSetupAlg(joinAlgs([solveToSolved.toString(), setupAlgForOrientation]));
-      })
-      .catch(() => {
-        if (cancelled) {
-          return;
-        }
-        setSessionAwareSetupAlg(setupAlgForOrientation);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [sessionStartPattern, setupAlgForOrientation, smartCubeConnected, trainingSessionId]);
+    const normalizeToSolved =
+      liveSessionStartAlg.trim().length > 0
+        ? new Alg(liveSessionStartAlg).invert().toString()
+        : "";
+    setSessionAwareSetupAlg(joinAlgs([normalizeToSolved, setupAlgForOrientation]));
+  }, [liveSessionStartAlg, setupAlgForOrientation, smartCubeConnected, trainingSessionId]);
 
   useEffect(() => {
     const nextSteps = buildGuideStepsFromAlg(setupGuideAlg);
@@ -1931,16 +1908,6 @@ function App() {
     requiredSolvedSlots,
     solvedPattern,
   ]);
-
-  async function generateScramble() {
-    setIsLoadingScramble(true);
-    try {
-      const next = await randomScrambleForEvent("333");
-      setScramble(next.toString());
-    } finally {
-      setIsLoadingScramble(false);
-    }
-  }
 
   function randomTrainingCase() {
     resetTrainingSessionFromCurrentState();
@@ -2071,18 +2038,6 @@ function App() {
                   : "New cross case"
                 : "Random case"}
             </button>
-            <button className="ghost-button" onClick={generateScramble}>
-              <TimerReset size={18} />
-              {isLoadingScramble ? "Loading" : "WCA scramble"}
-            </button>
-          </div>
-
-          <div className="scramble-box">
-            <div>
-              <span>Full solve scramble</span>
-              <ChevronRight size={16} />
-            </div>
-            <code>{scramble}</code>
           </div>
         </aside>
 

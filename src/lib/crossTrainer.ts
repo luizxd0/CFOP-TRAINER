@@ -216,25 +216,6 @@ function buildExactDistanceSetup(
     previousMove = chosen;
   }
 
-  // Randomize context while staying on the same exact-distance shell.
-  const shellSteps = 10 + randomInt(9);
-  for (let step = 0; step < shellSteps; step++) {
-    const candidates: number[] = [];
-    for (let moveIndex = 0; moveIndex < tables.moves.length; moveIndex++) {
-      const next = applyMoveToKey(currentKey, tables.moves[moveIndex]);
-      if (tables.dist[next] === targetDistance) {
-        candidates.push(moveIndex);
-      }
-    }
-    const chosen = chooseMove(candidates, tables.moves, previousMove);
-    if (chosen < 0) {
-      break;
-    }
-    currentKey = applyMoveToKey(currentKey, tables.moves[chosen]);
-    setupMoves.push(tables.moves[chosen].name);
-    previousMove = chosen;
-  }
-
   return { setupMoves, finalKey: currentKey };
 }
 
