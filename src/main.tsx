@@ -2029,20 +2029,24 @@ function App() {
             ))}
           </div>
 
-          <label className="field-label" htmlFor="case-select">
-            Case
-          </label>
-          <select
-            id="case-select"
-            value={activeCase.id}
-            onChange={(event) => handleCaseChange(event.target.value)}
-          >
-            {filteredCases.map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.name}
-              </option>
-            ))}
-          </select>
+          {stage !== "cross" && (
+            <>
+              <label className="field-label" htmlFor="case-select">
+                Case
+              </label>
+              <select
+                id="case-select"
+                value={activeCase.id}
+                onChange={(event) => handleCaseChange(event.target.value)}
+              >
+                {filteredCases.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.name}
+                  </option>
+                ))}
+              </select>
+            </>
+          )}
 
           <div className="action-row">
             <button
