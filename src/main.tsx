@@ -124,6 +124,34 @@ function isRunningAsInstalledApp(): boolean {
   );
 }
 
+function installPlatformLabel(): string {
+  if (typeof window === "undefined") {
+    return "Install app";
+  }
+  const userAgent = window.navigator.userAgent.toLowerCase();
+  if (/iphone|ipad|ipod/.test(userAgent)) {
+    return "Install on iPhone";
+  }
+  if (/android/.test(userAgent)) {
+    return "Install on Android";
+  }
+  return "Install app";
+}
+
+function manualInstallInstructions(): string {
+  if (typeof window === "undefined") {
+    return "Use your browser menu to install CFOP Trainer.";
+  }
+  const userAgent = window.navigator.userAgent.toLowerCase();
+  if (/iphone|ipad|ipod/.test(userAgent)) {
+    return "Install on iPhone: tap the Share button in Safari, then choose Add to Home Screen.";
+  }
+  if (/android/.test(userAgent)) {
+    return "Install on Android: open Chrome's menu and tap Install app. If it does not appear yet, refresh this page after the update loads.";
+  }
+  return "Install: open your browser menu and choose Install app or Add to Home Screen.";
+}
+
 function initialThemeMode(): ThemeMode {
   if (typeof window === "undefined") {
     return "dark";
@@ -2226,6 +2254,16 @@ function App() {
   }, []);
 
   useEffect(() => {
+    if (typeof window === "undefined" || !("serviceWorker" in window.navigator)) {
+      return;
+    }
+
+    void window.navigator.serviceWorker.register("/sw.js").catch(() => {
+      // Install support is optional; the manual iOS/Android instructions still work.
+    });
+  }, []);
+
+  useEffect(() => {
     if (cubeSkin === "f2l" && mirrorHintsEnabled) {
       setMirrorHintsEnabled(false);
     }
@@ -2866,7 +2904,7 @@ function App() {
       return;
     }
     setInstallMessage(
-      "On iPhone/iPad: tap Share, then Add to Home Screen. On Android: open the browser menu and tap Install app or Add to Home screen.",
+      manualInstallInstructions(),
     );
   }, [appInstalled, installPrompt]);
 
@@ -4018,7 +4056,7 @@ function App() {
                     View dashboard
                   </button>
                   <button className="ghost-button install-button" onClick={handleInstallApp}>
-                    {appInstalled ? "App installed" : "Add to home screen"}
+                    {appInstalled ? "App installed" : installPlatformLabel()}
                   </button>
                 </div>
                 {installMessage && <p className="install-hint">{installMessage}</p>}
