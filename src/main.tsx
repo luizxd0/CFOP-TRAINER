@@ -10,6 +10,7 @@ import {
   House,
   ListRestart,
   Moon,
+  PlayCircle,
   Radio,
   Shuffle,
   Sun,
@@ -858,6 +859,11 @@ function CubeViewer({
   hideControls = false,
   liveMoves = [],
   guideSteps = [],
+  showLiveMoves = false,
+  demoPlayerAvailable = false,
+  demoPlayerEnabled = false,
+  onDemoPlayerEnabledChange,
+  onDemoPlaybackFinished,
   timerLabel = null,
   isTimerRunning = false,
   isLive = false,
@@ -877,6 +883,11 @@ function CubeViewer({
   hideControls?: boolean;
   liveMoves?: string[];
   guideSteps?: Array<{ label: string; state: GuideStepState; progress: number }>;
+  showLiveMoves?: boolean;
+  demoPlayerAvailable?: boolean;
+  demoPlayerEnabled?: boolean;
+  onDemoPlayerEnabledChange?: (enabled: boolean) => void;
+  onDemoPlaybackFinished?: () => void;
   timerLabel?: string | null;
   isTimerRunning?: boolean;
   isLive?: boolean;
@@ -892,6 +903,7 @@ function CubeViewer({
   const liveSetupTokensRef = useRef<string[]>([]);
   const liveSyncReadyRef = useRef(false);
   const liveOrientationRef = useRef<CubeOrientation | null>(null);
+  const demoResetDoneRef = useRef(false);
   const homeOrientationRef = useRef(
     new THREE.Quaternion().setFromEuler(new THREE.Euler((15 * Math.PI) / 180, (-5 * Math.PI) / 180, 0)),
   );
@@ -980,9 +992,19 @@ function CubeViewer({
       liveOrientationRef.current = null;
       player.experimentalSetupAlg = playbackSetupWithOrientation;
       player.alg = playbackAlg;
+      if (demoPlayerEnabled && !demoResetDoneRef.current) {
+        demoResetDoneRef.current = true;
+        player.pause();
+        requestAnimationFrame(() => {
+          player.jumpToStart({ flash: false });
+        });
+      } else if (!demoPlayerEnabled) {
+        demoResetDoneRef.current = false;
+      }
       return;
     }
 
+    demoResetDoneRef.current = false;
     const nextTokens = splitAlgTokens(setup);
     const previousTokens = liveSetupTokensRef.current;
     const orientationChanged = liveOrientationRef.current !== cubeOrientation;
@@ -1021,7 +1043,7 @@ function CubeViewer({
     liveSetupTokensRef.current = nextTokens;
     liveSyncReadyRef.current = true;
     liveOrientationRef.current = cubeOrientation;
-  }, [setup, alg, cubeOrientation, cubeSkin, mirrorHintsEnabled, hideControls, isLive]);
+  }, [setup, alg, cubeOrientation, cubeSkin, mirrorHintsEnabled, hideControls, isLive, demoPlayerEnabled]);
 
   useEffect(() => {
     gyroBasisRef.current = null;
@@ -1031,14 +1053,14 @@ function CubeViewer({
     if (puzzleObjectRef.current) {
       puzzleObjectRef.current.quaternion.copy(liveTargetQuaternionRef.current);
     }
-    if (!isLive) {
+    if (!isLive && !demoPlayerEnabled) {
       puzzleObjectRef.current = null;
       vantageRef.current = null;
     }
-  }, [gyroSession, isLive, cubeOrientation]);
+  }, [gyroSession, isLive, cubeOrientation, demoPlayerEnabled]);
 
   useEffect(() => {
-    if (!isLive || !gyroQuaternion) {
+    if ((!isLive && !demoPlayerEnabled) || !gyroQuaternion) {
       return;
     }
 
@@ -1070,10 +1092,10 @@ function CubeViewer({
         .multiply(yellowTopRotationRef.current);
     }
     liveTargetQuaternionRef.current.copy(relativeOrientation.premultiply(homeOrientationRef.current));
-  }, [gyroQuaternion, isLive, cubeOrientation]);
+  }, [gyroQuaternion, isLive, cubeOrientation, demoPlayerEnabled]);
 
   useEffect(() => {
-    if (!isLive || !playerRef.current) {
+    if ((!isLive && !demoPlayerEnabled) || !playerRef.current) {
       if (rafRef.current !== null) {
         cancelAnimationFrame(rafRef.current);
         rafRef.current = null;
@@ -1130,9 +1152,45 @@ function CubeViewer({
       puzzleObjectRef.current = null;
       vantageRef.current = null;
     };
-  }, [isLive, gyroSession]);
+  }, [isLive, gyroSession, demoPlayerEnabled]);
 
   const visibleLiveMoves = useMemo(() => liveMoves.slice(-32), [liveMoves]);
+  const showGuideInHeadline = isLive && guideSteps.length > 0;
+
+  useEffect(() => {
+    const player = playerRef.current;
+    if (!player || !demoPlayerEnabled || !onDemoPlaybackFinished) {
+      return;
+    }
+
+    let hasPlayed = false;
+    const model = player.experimentalModel as any;
+    const playingInfoProp = model?.playingInfo;
+    const detailedTimelineInfoProp = model?.detailedTimelineInfo;
+    if (!playingInfoProp?.addFreshListener || !playingInfoProp?.removeFreshListener) {
+      return;
+    }
+
+    const listener = (playingInfo: { playing?: boolean }) => {
+      if (playingInfo.playing) {
+        hasPlayed = true;
+        return;
+      }
+      if (!hasPlayed) {
+        return;
+      }
+      void detailedTimelineInfoProp?.get?.().then((timeline: { atEnd?: boolean } | undefined) => {
+        if (timeline?.atEnd) {
+          onDemoPlaybackFinished();
+        }
+      });
+    };
+
+    playingInfoProp.addFreshListener(listener);
+    return () => {
+      playingInfoProp.removeFreshListener(listener);
+    };
+  }, [demoPlayerEnabled, onDemoPlaybackFinished]);
 
   return (
     <section className="viewer-panel" aria-label={title}>
@@ -1142,6 +1200,15 @@ function CubeViewer({
           <h2>{title}</h2>
         </div>
         <div className="chip-row">
+          {demoPlayerAvailable && (
+            <button
+              className={`mini-toggle ${demoPlayerEnabled ? "active" : ""}`}
+              onClick={() => onDemoPlayerEnabledChange?.(!demoPlayerEnabled)}
+            >
+              <PlayCircle size={15} />
+              Demo player
+            </button>
+          )}
           {timerLabel && !timerInHeadline && (
             <span className={`timer-chip ${isTimerRunning ? "running" : ""}`}>{timerLabel}</span>
           )}
@@ -1150,37 +1217,33 @@ function CubeViewer({
         </div>
       </div>
       {(headlineAlg || (timerInHeadline && headlineTimerActive && timerLabel)) && (
-        <div className="viewer-headline">
+        <div className={`viewer-headline ${showGuideInHeadline ? "with-guide" : ""}`}>
           {timerInHeadline && headlineTimerActive && timerLabel ? (
             <strong className={`viewer-timer-headline ${isTimerRunning ? "running" : ""}`}>{timerLabel}</strong>
           ) : (
-            <code>{headlineAlg}</code>
+            <>
+              <span className="viewer-headline-label">Set up Algorithm</span>
+              {showGuideInHeadline ? (
+                <div className="live-guide-steps live-guide-steps-headline" aria-label="Setup algorithm progress">
+                  {guideSteps.map((step, index) => (
+                    <i
+                      key={`${step.label}-${index}`}
+                      className={`guide-step ${step.state}`}
+                      style={{ ["--progress" as string]: `${Math.round(step.progress * 100)}%` }}
+                    >
+                      {step.label}
+                    </i>
+                  ))}
+                </div>
+              ) : (
+                <code>{headlineAlg}</code>
+              )}
+            </>
           )}
         </div>
       )}
       <div className="twisty-host" ref={hostRef} />
-      {isLive && (
-        <>
-          <div className="live-guide-strip">
-            <div className="live-guide-head">
-              <span>Setup Algorithm</span>
-            </div>
-            <div className="live-guide-steps">
-              {guideSteps.length === 0 ? (
-                <span>Waiting for setup algorithm...</span>
-              ) : (
-                guideSteps.map((step, index) => (
-                  <i
-                    key={`${step.label}-${index}`}
-                    className={`guide-step ${step.state}`}
-                    style={{ ["--progress" as string]: `${Math.round(step.progress * 100)}%` }}
-                  >
-                    {step.label}
-                  </i>
-                ))
-              )}
-            </div>
-          </div>
+      {showLiveMoves && (
           <div className="live-move-strip">
             {visibleLiveMoves.length === 0 ? (
               <span>Moves will appear here as you turn the cube.</span>
@@ -1190,7 +1253,6 @@ function CubeViewer({
               ))
             )}
           </div>
-        </>
       )}
     </section>
   );
@@ -2141,6 +2203,7 @@ function App() {
   const [smartCubeGyroSession, setSmartCubeGyroSession] = useState(0);
   const [setupGuideSteps, setSetupGuideSteps] = useState<GuideStepInternal[]>([]);
   const [setupGuideComplete, setSetupGuideComplete] = useState(false);
+  const [demoPlayerEnabled, setDemoPlayerEnabled] = useState(false);
   const [movesAfterSetup, setMovesAfterSetup] = useState(0);
   const [attemptFinished, setAttemptFinished] = useState(false);
   const [timerRunning, setTimerRunning] = useState(false);
@@ -2163,6 +2226,9 @@ function App() {
   const freeSolveLoggedRef = useRef(false);
   const [cubeKpuzzle, setCubeKpuzzle] = useState<CubeKpuzzle | null>(null);
   const setupGuideCompleteRef = useRef(false);
+  const timerRunningRef = useRef(false);
+  const timerStartAtRef = useRef<number | null>(null);
+  const attemptFinishedRef = useRef(false);
   const prevSetupGuideCompleteRef = useRef(false);
   const prevAttemptFinishedRef = useRef(false);
   const pendingFaceletsBootstrapRef = useRef(false);
@@ -2224,6 +2290,18 @@ function App() {
   useEffect(() => {
     smartCubeMovesRef.current = smartCubeMoves;
   }, [smartCubeMoves]);
+
+  useEffect(() => {
+    timerRunningRef.current = timerRunning;
+  }, [timerRunning]);
+
+  useEffect(() => {
+    timerStartAtRef.current = timerStartAt;
+  }, [timerStartAt]);
+
+  useEffect(() => {
+    attemptFinishedRef.current = attemptFinished;
+  }, [attemptFinished]);
 
   useEffect(() => {
     if (typeof window === "undefined" || typeof document === "undefined") {
@@ -2434,6 +2512,10 @@ function App() {
   }, [activeCaseWithTrainingSetup.id, activeCaseWithTrainingSetup.setup]);
 
   const solution = activeCaseWithTrainingSetup.solutions[0].alg;
+  const solutionForPattern = useMemo(
+    () => stripCubeRotations(solution),
+    [solution],
+  );
   const targetSetupAlgCanonical = isFreeMode ? freeScramble : activeCaseWithTrainingSetup.setup;
   const setupAlgForOrientation = useMemo(
     () => activeCaseWithTrainingSetup.setup,
@@ -2461,21 +2543,27 @@ function App() {
       const raw = smartCubeConnected
         ? (sessionAwareSetupAlg ?? targetSetupAlgForOrientation)
         : targetSetupAlgForOrientation;
-      return simplifyAlgText(raw);
+      return simplifyAlgText(smartCubeConnected ? stripCubeRotations(raw) : raw);
     },
     [sessionAwareSetupAlg, smartCubeConnected, targetSetupAlgForOrientation],
   );
-  const isLiveViewer = smartCubeConnected;
-  const viewerTitle = isLiveViewer
+  const demoPlayerAvailable = smartCubeConnected && !isFreeMode && setupGuideComplete;
+  const isDemoViewer = demoPlayerAvailable && demoPlayerEnabled;
+  const isLiveViewer = smartCubeConnected && !isDemoViewer;
+  const viewerTitle = isDemoViewer
+    ? "Solution Demo"
+    : isLiveViewer
     ? "Live Smart Cube"
     : isFreeMode
       ? "Free Practice"
       : activeCaseWithTrainingSetup.name;
   // In live mode we must use setup (not alg) so the cube shows current state immediately.
-  const viewerSetup = isLiveViewer
+  const viewerSetup = isDemoViewer
+    ? targetSetupAlgForOrientation
+    : isLiveViewer
     ? smartCubeAlgForOrientation
     : targetSetupAlgForOrientation;
-  const viewerAlg = isLiveViewer || isFreeMode ? "" : solutionAlgForOrientation;
+  const viewerAlg = isDemoViewer || (!isLiveViewer && !isFreeMode) ? solutionAlgForOrientation : "";
   const viewerContextMoves = isLiveViewer ? liveSessionMoveCount : isFreeMode ? 0 : moveCount(contextAlg);
   const setupGuideStepViews = useMemo(
     () => {
@@ -2576,9 +2664,13 @@ function App() {
     () => (cubeKpuzzle ? cubeKpuzzle.defaultPattern() : null),
     [cubeKpuzzle],
   );
+  const targetSetupAlgForPattern = useMemo(
+    () => stripCubeRotations(targetSetupAlgCanonical),
+    [targetSetupAlgCanonical],
+  );
   const setupTargetPattern = useMemo(
-    () => (cubeKpuzzle ? cubeKpuzzle.defaultPattern().applyAlg(targetSetupAlgCanonical) : null),
-    [cubeKpuzzle, targetSetupAlgCanonical],
+    () => (cubeKpuzzle ? cubeKpuzzle.defaultPattern().applyAlg(targetSetupAlgForPattern) : null),
+    [cubeKpuzzle, targetSetupAlgForPattern],
   );
   const solvedTargetPattern = useMemo(
     () => {
@@ -2586,10 +2678,10 @@ function App() {
         return solvedPattern;
       }
       return setupTargetPattern
-        ? setupTargetPattern.applyAlg(solution)
+        ? setupTargetPattern.applyAlg(solutionForPattern)
         : null;
     },
-    [isFreeMode, setupTargetPattern, solution, solvedPattern],
+    [isFreeMode, setupTargetPattern, solutionForPattern, solvedPattern],
   );
   const requiredSolvedSlots = useMemo(() => {
     if (!setupTargetPattern || !solvedTargetPattern || !solvedPattern) {
@@ -2601,6 +2693,15 @@ function App() {
       solvedPattern as unknown as { patternData: Record<string, any> },
     );
   }, [setupTargetPattern, solvedTargetPattern, solvedPattern]);
+  const f2lRequiredSolvedSlots = useMemo(
+    () =>
+      requiredSolvedSlots.filter(
+        (slot) =>
+          (slot.orbit === "EDGES" && F2L_EDGE_SLOTS.includes(slot.index as (typeof F2L_EDGE_SLOTS)[number])) ||
+          (slot.orbit === "CORNERS" && F2L_CORNER_SLOTS.includes(slot.index as (typeof F2L_CORNER_SLOTS)[number])),
+      ),
+    [requiredSolvedSlots],
+  );
 
   const handleSmartCubeMove = useCallback((move: { raw: string; display: string }) => {
     setSmartCubeMoves((current) => [...current, move.raw].slice(-500));
@@ -2612,6 +2713,14 @@ function App() {
       if (isFreeMode && freeInspectionRunning) {
         setFreeInspectionRunning(false);
         setFreeInspectionRemainingMs(0);
+      }
+      if (!timerRunningRef.current && !attemptFinishedRef.current) {
+        const startedAt = performance.now();
+        timerStartAtRef.current = startedAt;
+        timerRunningRef.current = true;
+        setTimerStartAt(startedAt);
+        setTimerElapsedMs(0);
+        setTimerRunning(true);
       }
       setMovesAfterSetup((current) => current + 1);
       return;
@@ -2696,8 +2805,11 @@ function App() {
     prevSetupGuideCompleteRef.current = false;
     setMovesAfterSetup(0);
     setAttemptFinished(false);
+    attemptFinishedRef.current = false;
     setTimerRunning(false);
+    timerRunningRef.current = false;
     setTimerStartAt(null);
+    timerStartAtRef.current = null;
     setTimerElapsedMs(0);
     setFreeInspectionRunning(false);
     setFreeInspectionRemainingMs(null);
@@ -2717,8 +2829,11 @@ function App() {
     prevSetupGuideCompleteRef.current = false;
     setMovesAfterSetup(0);
     setAttemptFinished(false);
+    attemptFinishedRef.current = false;
     setTimerRunning(false);
+    timerRunningRef.current = false;
     setTimerStartAt(null);
+    timerStartAtRef.current = null;
     setTimerElapsedMs(0);
     setFreeInspectionRunning(false);
     setFreeInspectionRemainingMs(null);
@@ -2760,8 +2875,11 @@ function App() {
         prevSetupGuideCompleteRef.current = false;
         setMovesAfterSetup(0);
         setAttemptFinished(false);
+        attemptFinishedRef.current = false;
         setTimerRunning(false);
+        timerRunningRef.current = false;
         setTimerStartAt(null);
+        timerStartAtRef.current = null;
         setTimerElapsedMs(0);
       })
       .catch(() => {
@@ -3256,9 +3374,13 @@ function App() {
     prevSetupGuideCompleteRef.current = complete;
     setMovesAfterSetup(0);
     setAttemptFinished(false);
+    attemptFinishedRef.current = false;
     setTimerRunning(false);
+    timerRunningRef.current = false;
     setTimerStartAt(null);
+    timerStartAtRef.current = null;
     setTimerElapsedMs(0);
+    setDemoPlayerEnabled(false);
   }, [setupGuideAlg, smartCubeGyroSession, trainingSessionId]);
 
   useEffect(() => {
@@ -3306,6 +3428,12 @@ function App() {
       setupGuideCompleteRef.current = true;
     }
   }, [setupGuideComplete, currentLivePattern, setupTargetPattern]);
+
+  useEffect(() => {
+    if (!demoPlayerAvailable) {
+      setDemoPlayerEnabled(false);
+    }
+  }, [demoPlayerAvailable]);
 
   useEffect(() => {
     if (
@@ -3368,16 +3496,8 @@ function App() {
   ]);
 
   useEffect(() => {
-    const wasFinished = prevAttemptFinishedRef.current;
-    const justFinished = !wasFinished && attemptFinished;
     prevAttemptFinishedRef.current = attemptFinished;
-    if (!justFinished || !smartCubeConnected || isFreeMode) {
-      return;
-    }
-    // As soon as a case is solved, recompute setup from current physical state
-    // so the same selected case can be drilled repeatedly.
-    resetTrainingSessionFromCurrentState();
-  }, [attemptFinished, isFreeMode, resetTrainingSessionFromCurrentState, smartCubeConnected]);
+  }, [attemptFinished]);
 
   useEffect(() => {
     if (!timerRunning || timerStartAt === null) {
@@ -3466,10 +3586,12 @@ function App() {
     const f2lGoalMatch =
       !isFreeMode &&
       stage === "f2l" &&
+      f2lRequiredSolvedSlots.length > 0 &&
       solvedPattern &&
-      isF2LSolved(
+      areSlotsSolved(
         currentLivePattern as unknown as { patternData: Record<string, any> },
         solvedPattern as unknown as { patternData: Record<string, any> },
+        f2lRequiredSolvedSlots,
       );
     const ollGoalMatch =
       !isFreeMode &&
@@ -3487,6 +3609,7 @@ function App() {
     const stageGoalMatch =
       !isFreeMode &&
       stage !== "cross" &&
+      stage !== "f2l" &&
       requiredSolvedSlots.length > 0 &&
       solvedPattern &&
       areSlotsSolved(
@@ -3527,7 +3650,9 @@ function App() {
         freeSolveLoggedRef.current = true;
       }
       setTimerRunning(false);
+      timerRunningRef.current = false;
       setAttemptFinished(true);
+      attemptFinishedRef.current = true;
       setTimerElapsedMs(totalMs);
     }
   }, [
@@ -3543,6 +3668,7 @@ function App() {
     timerElapsedMs,
     timerStartAt,
     requiredSolvedSlots,
+    f2lRequiredSolvedSlots,
     solvedPattern,
     activeCaseWithTrainingSetup.id,
     activeCaseWithTrainingSetup.stage,
@@ -3579,15 +3705,21 @@ function App() {
           logPracticeTiming(activeCaseWithTrainingSetup.id, totalMs);
         }
         setTimerRunning(false);
+        timerRunningRef.current = false;
         setTimerElapsedMs(totalMs);
         setAttemptFinished(true);
+        attemptFinishedRef.current = true;
         return;
       }
 
       setAttemptFinished(false);
+      attemptFinishedRef.current = false;
       setTimerElapsedMs(0);
-      setTimerStartAt(performance.now());
+      const startedAt = performance.now();
+      setTimerStartAt(startedAt);
+      timerStartAtRef.current = startedAt;
       setTimerRunning(true);
+      timerRunningRef.current = true;
     };
 
     window.addEventListener("keydown", onKeyDown);
@@ -3898,13 +4030,18 @@ function App() {
               cubeOrientation={cubeOrientation}
               cubeSkin={cubeSkin}
               mirrorHintsEnabled={mirrorHintsEnabled}
-              hideControls={isFreeMode}
+              hideControls={smartCubeConnected ? !isDemoViewer : isFreeMode}
               liveMoves={smartCubeDisplayMoves}
               guideSteps={setupGuideStepViews}
+              showLiveMoves={smartCubeConnected}
+              demoPlayerAvailable={demoPlayerAvailable}
+              demoPlayerEnabled={demoPlayerEnabled}
+              onDemoPlayerEnabledChange={setDemoPlayerEnabled}
+              onDemoPlaybackFinished={() => setDemoPlayerEnabled(false)}
               timerLabel={timerLabel}
               isTimerRunning={timerRunning}
               isLive={isLiveViewer}
-              gyroQuaternion={isLiveViewer ? smartCubeGyro : null}
+              gyroQuaternion={smartCubeConnected ? smartCubeGyro : null}
               gyroSession={smartCubeGyroSession}
             />
           </div>
