@@ -1704,9 +1704,10 @@ function SmartCubePanel({
             if (!move) {
               break;
             }
+            const orientedMove = remapMoveForOrientation(move, cubeOrientation);
             emitMove({
               raw: move,
-              display: remapMoveForPerspective(move, gyroRelativeForMovesRef.current),
+              display: remapMoveForPerspective(orientedMove, gyroRelativeForMovesRef.current),
             });
           }
           break;
@@ -2558,8 +2559,8 @@ function App() {
     [smartCubeMoves],
   );
   const smartCubeAlgForOrientation = useMemo(
-    () => smartCubeMoves.join(" "),
-    [smartCubeMoves],
+    () => smartCubeMoves.map((move) => remapMoveForOrientation(move, cubeOrientation)).join(" "),
+    [cubeOrientation, smartCubeMoves],
   );
   const liveSessionStartAlgCanonical = useMemo(
     () => liveSessionStartMoves.join(" "),
