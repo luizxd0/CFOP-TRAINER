@@ -2573,9 +2573,9 @@ function App() {
         ? (sessionAwareSetupAlg ?? targetSetupAlgForOrientation)
         : targetSetupAlgForOrientation;
       const normalized = smartCubeConnected ? stripCubeRotations(raw) : raw;
-      return simplifyAlgText(normalized);
+      return simplifyAlgText(remapAlgForOrientation(normalized, cubeOrientation));
     },
-    [sessionAwareSetupAlg, smartCubeConnected, targetSetupAlgForOrientation],
+    [cubeOrientation, sessionAwareSetupAlg, smartCubeConnected, targetSetupAlgForOrientation],
   );
   const demoPlayerAvailable = smartCubeConnected && !isFreeMode && setupGuideComplete;
   const isDemoViewer = demoPlayerAvailable && demoPlayerEnabled;
@@ -2780,7 +2780,7 @@ function App() {
         return current;
       }
       // Guide tracking must use cube-state notation (not gyro-perspective display labels).
-      const normalizedToken = move.raw.trim();
+      const normalizedToken = remapMoveForOrientation(move.raw, cubeOrientation).trim();
       const incomingAtoms = tokenToAtoms(normalizedToken)
         .map((atom) => atom.trim())
         .filter((atom) => atom.length > 0);
