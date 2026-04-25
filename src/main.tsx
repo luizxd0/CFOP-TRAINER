@@ -2572,9 +2572,10 @@ function App() {
       const raw = smartCubeConnected
         ? (sessionAwareSetupAlg ?? targetSetupAlgForOrientation)
         : targetSetupAlgForOrientation;
-      return simplifyAlgText(smartCubeConnected ? stripCubeRotations(raw) : raw);
+      const normalized = smartCubeConnected ? stripCubeRotations(raw) : raw;
+      return simplifyAlgText(remapAlgForOrientation(normalized, cubeOrientation));
     },
-    [sessionAwareSetupAlg, smartCubeConnected, targetSetupAlgForOrientation],
+    [cubeOrientation, sessionAwareSetupAlg, smartCubeConnected, targetSetupAlgForOrientation],
   );
   const demoPlayerAvailable = smartCubeConnected && !isFreeMode && setupGuideComplete;
   const isDemoViewer = demoPlayerAvailable && demoPlayerEnabled;
