@@ -738,6 +738,17 @@ function isOllSolved(
   );
 }
 
+function collectUnsolvedSlots(
+  pattern: { patternData: Record<string, any> },
+  solved: { patternData: Record<string, any> },
+  orbit: string,
+  slots: readonly number[],
+): OrbitSlot[] {
+  return slots
+    .filter((index) => !isSlotSolved(pattern, solved, orbit, index))
+    .map((index) => ({ orbit, index }));
+}
+
 const CUBIE_CORNER_TO_KPATTERN_CORNER = [0, 3, 2, 1, 4, 5, 6, 7] as const;
 const CUBIE_EDGE_TO_KPATTERN_EDGE = [1, 0, 3, 2, 5, 4, 7, 6, 8, 9, 11, 10] as const;
 
@@ -2224,6 +2235,7 @@ function App() {
   });
   const [freeLastSolves, setFreeLastSolves] = useState<FreeSolveRecord[]>([]);
   const freeSolveLoggedRef = useRef(false);
+  const freeLastSplitMoveCountRef = useRef(0);
   const [cubeKpuzzle, setCubeKpuzzle] = useState<CubeKpuzzle | null>(null);
   const setupGuideCompleteRef = useRef(false);
   const timerRunningRef = useRef(false);
@@ -2702,6 +2714,25 @@ function App() {
       ),
     [requiredSolvedSlots],
   );
+  const f2lCaseUnsolvedSlots = useMemo(() => {
+    if (!setupTargetPattern || !solvedPattern) {
+      return [] as OrbitSlot[];
+    }
+    return [
+      ...collectUnsolvedSlots(
+        setupTargetPattern as unknown as { patternData: Record<string, any> },
+        solvedPattern as unknown as { patternData: Record<string, any> },
+        "EDGES",
+        F2L_EDGE_SLOTS,
+      ),
+      ...collectUnsolvedSlots(
+        setupTargetPattern as unknown as { patternData: Record<string, any> },
+        solvedPattern as unknown as { patternData: Record<string, any> },
+        "CORNERS",
+        F2L_CORNER_SLOTS,
+      ),
+    ];
+  }, [setupTargetPattern, solvedPattern]);
 
   const handleSmartCubeMove = useCallback((move: { raw: string; display: string }) => {
     setSmartCubeMoves((current) => [...current, move.raw].slice(-500));
@@ -2815,6 +2846,7 @@ function App() {
     setFreeInspectionRemainingMs(null);
     setFreeStepMarks({ crossMs: null, f2lMs: null, ollMs: null });
     freeSolveLoggedRef.current = false;
+    freeLastSplitMoveCountRef.current = 0;
   }, []);
 
   const resetTrainingSessionFromCurrentState = useCallback(() => {
@@ -2839,6 +2871,7 @@ function App() {
     setFreeInspectionRemainingMs(null);
     setFreeStepMarks({ crossMs: null, f2lMs: null, ollMs: null });
     freeSolveLoggedRef.current = false;
+    freeLastSplitMoveCountRef.current = 0;
   }, []);
 
   const attemptFaceletsBootstrap = useCallback(() => {
@@ -2881,6 +2914,7 @@ function App() {
         setTimerStartAt(null);
         timerStartAtRef.current = null;
         setTimerElapsedMs(0);
+        freeLastSplitMoveCountRef.current = 0;
       })
       .catch(() => {
         // Ignore bootstrap errors and keep move-based tracking.
@@ -3381,6 +3415,7 @@ function App() {
     timerStartAtRef.current = null;
     setTimerElapsedMs(0);
     setDemoPlayerEnabled(false);
+    freeLastSplitMoveCountRef.current = 0;
   }, [setupGuideAlg, smartCubeGyroSession, trainingSessionId]);
 
   useEffect(() => {
@@ -3515,6 +3550,9 @@ function App() {
     if (!isFreeMode || !timerRunning || !currentLivePattern || !solvedPattern || timerStartAt === null) {
       return;
     }
+    if (freeLastSplitMoveCountRef.current === movesAfterSetup) {
+      return;
+    }
     const elapsed = performance.now() - timerStartAt;
     setFreeStepMarks((current) => {
       const next = { ...current };
@@ -3528,9 +3566,9 @@ function App() {
       ) {
         next.crossMs = elapsed;
         changed = true;
-      }
-      if (
+      } else if (
         next.f2lMs === null &&
+        next.crossMs !== null &&
         isF2LSolved(
           currentLivePattern as unknown as { patternData: Record<string, any> },
           solvedPattern as unknown as { patternData: Record<string, any> },
@@ -3538,9 +3576,9 @@ function App() {
       ) {
         next.f2lMs = elapsed;
         changed = true;
-      }
-      if (
+      } else if (
         next.ollMs === null &&
+        next.f2lMs !== null &&
         isOllSolved(
           currentLivePattern as unknown as { patternData: Record<string, any> },
           solvedPattern as unknown as { patternData: Record<string, any> },
@@ -3549,9 +3587,12 @@ function App() {
         next.ollMs = elapsed;
         changed = true;
       }
+      if (changed) {
+        freeLastSplitMoveCountRef.current = movesAfterSetup;
+      }
       return changed ? next : current;
     });
-  }, [currentLivePattern, isFreeMode, solvedPattern, timerRunning, timerStartAt]);
+  }, [currentLivePattern, isFreeMode, movesAfterSetup, solvedPattern, timerRunning, timerStartAt]);
 
   useEffect(() => {
     if (!timerRunning || !currentLivePattern) {
@@ -3586,12 +3627,35 @@ function App() {
     const f2lGoalMatch =
       !isFreeMode &&
       stage === "f2l" &&
-      f2lRequiredSolvedSlots.length > 0 &&
       solvedPattern &&
-      areSlotsSolved(
-        currentLivePattern as unknown as { patternData: Record<string, any> },
-        solvedPattern as unknown as { patternData: Record<string, any> },
-        f2lRequiredSolvedSlots,
+      (
+        (f2lRequiredSolvedSlots.length > 0 &&
+          areSlotsSolved(
+            currentLivePattern as unknown as { patternData: Record<string, any> },
+            solvedPattern as unknown as { patternData: Record<string, any> },
+            f2lRequiredSolvedSlots,
+          )) ||
+        (f2lCaseUnsolvedSlots.length > 0 &&
+          f2lCaseUnsolvedSlots.some(
+            (slot) =>
+              slot.orbit === "EDGES" &&
+              isSlotSolved(
+                currentLivePattern as unknown as { patternData: Record<string, any> },
+                solvedPattern as unknown as { patternData: Record<string, any> },
+                slot.orbit,
+                slot.index,
+              ),
+          ) &&
+          f2lCaseUnsolvedSlots.some(
+            (slot) =>
+              slot.orbit === "CORNERS" &&
+              isSlotSolved(
+                currentLivePattern as unknown as { patternData: Record<string, any> },
+                solvedPattern as unknown as { patternData: Record<string, any> },
+                slot.orbit,
+                slot.index,
+              ),
+          ))
       );
     const ollGoalMatch =
       !isFreeMode &&
@@ -3669,6 +3733,7 @@ function App() {
     timerStartAt,
     requiredSolvedSlots,
     f2lRequiredSolvedSlots,
+    f2lCaseUnsolvedSlots,
     solvedPattern,
     activeCaseWithTrainingSetup.id,
     activeCaseWithTrainingSetup.stage,
