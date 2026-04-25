@@ -722,6 +722,22 @@ function isF2LSolved(
   );
 }
 
+function countSolvedF2LPairs(
+  pattern: { patternData: Record<string, any> },
+  solved: { patternData: Record<string, any> },
+): number {
+  let count = 0;
+  for (let i = 0; i < F2L_EDGE_SLOTS.length; i += 1) {
+    if (
+      isSlotSolved(pattern, solved, "EDGES", F2L_EDGE_SLOTS[i]) &&
+      isSlotSolved(pattern, solved, "CORNERS", F2L_CORNER_SLOTS[i])
+    ) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
 function isOllSolved(
   pattern: { patternData: Record<string, any> },
   solved: { patternData: Record<string, any> },
@@ -3665,6 +3681,15 @@ function App() {
       stage === "f2l" &&
       solvedPattern &&
       (
+        ((attemptStartPattern || setupTargetPattern) &&
+          countSolvedF2LPairs(
+            currentLivePattern as unknown as { patternData: Record<string, any> },
+            solvedPattern as unknown as { patternData: Record<string, any> },
+          ) >
+            countSolvedF2LPairs(
+              (attemptStartPattern ?? setupTargetPattern) as unknown as { patternData: Record<string, any> },
+              solvedPattern as unknown as { patternData: Record<string, any> },
+            )) ||
         (f2lRequiredSolvedSlots.length > 0 &&
           areSlotsSolved(
             currentLivePattern as unknown as { patternData: Record<string, any> },
@@ -3770,6 +3795,8 @@ function App() {
     requiredSolvedSlots,
     f2lRequiredSolvedSlots,
     f2lCaseUnsolvedSlots,
+    attemptStartPattern,
+    setupTargetPattern,
     solvedPattern,
     activeCaseWithTrainingSetup.id,
     activeCaseWithTrainingSetup.stage,

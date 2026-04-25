@@ -1898,6 +1898,53 @@ code {
     grid-template-columns: minmax(0, 1fr) auto;
   }
 
+  .viewer-toolbar {
+    padding-inline: 10px;
+  }
+
+  .viewer-headline {
+    padding-inline: 10px;
+  }
+
+  .viewer-headline code {
+    display: block;
+    white-space: normal;
+    overflow: visible;
+    overflow-wrap: anywhere;
+    font-size: 0.88rem;
+  }
+
+  .live-guide-steps,
+  .live-guide-steps-headline {
+    flex-wrap: wrap;
+    justify-content: center;
+    overflow: visible;
+    gap: 5px;
+  }
+
+  .guide-step {
+    min-width: 28px;
+    height: 26px;
+    border-radius: 7px;
+    padding: 0 6px;
+    font-size: 0.78rem;
+  }
+
+  .live-move-strip {
+    flex-wrap: wrap;
+    justify-content: center;
+    min-height: 0;
+    padding: 7px 10px;
+    overflow: visible;
+  }
+
+  .live-move-strip b {
+    min-width: 28px;
+    height: 25px;
+    border-radius: 7px;
+    font-size: 0.78rem;
+  }
+
   .brand-lockup {
     min-height: 42px;
   }
