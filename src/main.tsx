@@ -2214,6 +2214,7 @@ function App() {
   const [smartCubeGyroSession, setSmartCubeGyroSession] = useState(0);
   const [setupGuideSteps, setSetupGuideSteps] = useState<GuideStepInternal[]>([]);
   const [setupGuideComplete, setSetupGuideComplete] = useState(false);
+  const [attemptStartPattern, setAttemptStartPattern] = useState<KPattern | null>(null);
   const [demoPlayerEnabled, setDemoPlayerEnabled] = useState(false);
   const [movesAfterSetup, setMovesAfterSetup] = useState(0);
   const [attemptFinished, setAttemptFinished] = useState(false);
@@ -2715,24 +2716,25 @@ function App() {
     [requiredSolvedSlots],
   );
   const f2lCaseUnsolvedSlots = useMemo(() => {
-    if (!setupTargetPattern || !solvedPattern) {
+    const baselinePattern = attemptStartPattern ?? setupTargetPattern;
+    if (!baselinePattern || !solvedPattern) {
       return [] as OrbitSlot[];
     }
     return [
       ...collectUnsolvedSlots(
-        setupTargetPattern as unknown as { patternData: Record<string, any> },
+        baselinePattern as unknown as { patternData: Record<string, any> },
         solvedPattern as unknown as { patternData: Record<string, any> },
         "EDGES",
         F2L_EDGE_SLOTS,
       ),
       ...collectUnsolvedSlots(
-        setupTargetPattern as unknown as { patternData: Record<string, any> },
+        baselinePattern as unknown as { patternData: Record<string, any> },
         solvedPattern as unknown as { patternData: Record<string, any> },
         "CORNERS",
         F2L_CORNER_SLOTS,
       ),
     ];
-  }, [setupTargetPattern, solvedPattern]);
+  }, [attemptStartPattern, setupTargetPattern, solvedPattern]);
 
   const handleSmartCubeMove = useCallback((move: { raw: string; display: string }) => {
     setSmartCubeMoves((current) => [...current, move.raw].slice(-500));
@@ -2834,6 +2836,7 @@ function App() {
     setSetupGuideComplete(false);
     setupGuideCompleteRef.current = false;
     prevSetupGuideCompleteRef.current = false;
+    setAttemptStartPattern(null);
     setMovesAfterSetup(0);
     setAttemptFinished(false);
     attemptFinishedRef.current = false;
@@ -2859,6 +2862,7 @@ function App() {
     setSetupGuideComplete(false);
     setupGuideCompleteRef.current = false;
     prevSetupGuideCompleteRef.current = false;
+    setAttemptStartPattern(null);
     setMovesAfterSetup(0);
     setAttemptFinished(false);
     attemptFinishedRef.current = false;
@@ -2906,6 +2910,7 @@ function App() {
         setSetupGuideComplete(false);
         setupGuideCompleteRef.current = false;
         prevSetupGuideCompleteRef.current = false;
+        setAttemptStartPattern(null);
         setMovesAfterSetup(0);
         setAttemptFinished(false);
         attemptFinishedRef.current = false;
@@ -3368,6 +3373,27 @@ function App() {
     }
 
     const sessionStartPattern = cubeKpuzzle.defaultPattern().applyAlg(liveSessionStartAlgCanonical);
+    const solved = cubeKpuzzle.defaultPattern();
+    if (
+      (stage === "f2l" &&
+        isCrossSolved(
+          sessionStartPattern as unknown as { patternData: Record<string, any> },
+          solved as unknown as { patternData: Record<string, any> },
+        )) ||
+      (stage === "oll" &&
+        isF2LSolved(
+          sessionStartPattern as unknown as { patternData: Record<string, any> },
+          solved as unknown as { patternData: Record<string, any> },
+        )) ||
+      (stage === "pll" &&
+        isOllSolved(
+          sessionStartPattern as unknown as { patternData: Record<string, any> },
+          solved as unknown as { patternData: Record<string, any> },
+        ))
+    ) {
+      setSessionAwareSetupAlg(simplifyAlgText(activeCase.baseSetup));
+      return;
+    }
     void experimentalSolve3x3x3IgnoringCenters(sessionStartPattern)
       .then((solveToSolved) => {
         if (cancelled) {
@@ -3394,7 +3420,9 @@ function App() {
     cubeKpuzzle,
     liveSessionStartAlgCanonical,
     targetSetupAlgCanonical,
+    activeCase.baseSetup,
     cubeOrientation,
+    stage,
     smartCubeConnected,
     trainingSessionId,
   ]);
@@ -3406,6 +3434,7 @@ function App() {
     setSetupGuideComplete(complete);
     setupGuideCompleteRef.current = complete;
     prevSetupGuideCompleteRef.current = complete;
+    setAttemptStartPattern(null);
     setMovesAfterSetup(0);
     setAttemptFinished(false);
     attemptFinishedRef.current = false;
@@ -3463,6 +3492,13 @@ function App() {
       setupGuideCompleteRef.current = true;
     }
   }, [setupGuideComplete, currentLivePattern, setupTargetPattern]);
+
+  useEffect(() => {
+    if (!setupGuideComplete || movesAfterSetup > 0 || !currentLivePattern || attemptStartPattern) {
+      return;
+    }
+    setAttemptStartPattern(currentLivePattern);
+  }, [attemptStartPattern, currentLivePattern, movesAfterSetup, setupGuideComplete]);
 
   useEffect(() => {
     if (!demoPlayerAvailable) {
