@@ -3391,12 +3391,33 @@ function App() {
 
     const sessionStartPattern = cubeKpuzzle.defaultPattern().applyAlg(liveSessionStartAlgCanonical);
     const solved = cubeKpuzzle.defaultPattern();
+    const f2lCaseSetupPattern = solved.applyAlg(stripCubeRotations(activeCase.baseSetup));
+    const f2lSetupSlots = [
+      ...collectUnsolvedSlots(
+        f2lCaseSetupPattern as unknown as { patternData: Record<string, any> },
+        solved as unknown as { patternData: Record<string, any> },
+        "EDGES",
+        F2L_EDGE_SLOTS,
+      ),
+      ...collectUnsolvedSlots(
+        f2lCaseSetupPattern as unknown as { patternData: Record<string, any> },
+        solved as unknown as { patternData: Record<string, any> },
+        "CORNERS",
+        F2L_CORNER_SLOTS,
+      ),
+    ];
     if (
       (stage === "f2l" &&
         isCrossSolved(
           sessionStartPattern as unknown as { patternData: Record<string, any> },
           solved as unknown as { patternData: Record<string, any> },
-        )) ||
+        ) &&
+        (f2lSetupSlots.length === 0 ||
+          areSlotsSolved(
+            sessionStartPattern as unknown as { patternData: Record<string, any> },
+            solved as unknown as { patternData: Record<string, any> },
+            f2lSetupSlots,
+          ))) ||
       (stage === "oll" &&
         isF2LSolved(
           sessionStartPattern as unknown as { patternData: Record<string, any> },
