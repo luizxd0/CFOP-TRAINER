@@ -737,20 +737,39 @@ function isOllSolved(
   );
 }
 
+const CUBIE_CORNER_TO_KPATTERN_CORNER = [0, 3, 2, 1, 4, 5, 6, 7] as const;
+const CUBIE_EDGE_TO_KPATTERN_EDGE = [1, 0, 3, 2, 5, 4, 7, 6, 8, 9, 11, 10] as const;
+
 function patternFromFacelets(facelets: string, kpuzzle: CubeKpuzzle): KPattern | null {
   const parsed = new CubieCube().fromFacelet(facelets);
   if (parsed === -1) {
     return null;
   }
   const cubie = parsed as CubieCube;
+  const edgePieces = Array<number>(12);
+  const edgeOrientations = Array<number>(12);
+  const cornerPieces = Array<number>(8);
+  const cornerOrientations = Array<number>(8);
+
+  cubie.ea.forEach((entry, cubiePosition) => {
+    const kpuzzlePosition = CUBIE_EDGE_TO_KPATTERN_EDGE[cubiePosition];
+    edgePieces[kpuzzlePosition] = CUBIE_EDGE_TO_KPATTERN_EDGE[entry >> 1];
+    edgeOrientations[kpuzzlePosition] = entry & 1;
+  });
+  cubie.ca.forEach((entry, cubiePosition) => {
+    const kpuzzlePosition = CUBIE_CORNER_TO_KPATTERN_CORNER[cubiePosition];
+    cornerPieces[kpuzzlePosition] = CUBIE_CORNER_TO_KPATTERN_CORNER[entry & 7];
+    cornerOrientations[kpuzzlePosition] = entry >> 3;
+  });
+
   return new KPattern(kpuzzle, {
     EDGES: {
-      pieces: cubie.ea.map((entry) => entry >> 1),
-      orientation: cubie.ea.map((entry) => entry & 1),
+      pieces: edgePieces,
+      orientation: edgeOrientations,
     },
     CORNERS: {
-      pieces: cubie.ca.map((entry) => entry & 7),
-      orientation: cubie.ca.map((entry) => entry >> 3),
+      pieces: cornerPieces,
+      orientation: cornerOrientations,
     },
     CENTERS: {
       pieces: [0, 1, 2, 3, 4, 5],
@@ -3415,13 +3434,15 @@ function App() {
   }, [currentLivePattern, isFreeMode, solvedPattern, timerRunning, timerStartAt]);
 
   useEffect(() => {
-    if (!timerRunning || !currentLivePattern || !solvedTargetPattern) {
+    if (!timerRunning || !currentLivePattern) {
       return;
     }
     if (!smartCubeConnected) {
       return;
     }
-    const exactMatch = currentLivePattern.isIdentical(solvedTargetPattern);
+    const exactMatch = solvedTargetPattern
+      ? currentLivePattern.isIdentical(solvedTargetPattern)
+      : false;
     const freeModeGoalMatch =
       isFreeMode &&
       solvedPattern &&
@@ -3433,6 +3454,14 @@ function App() {
       isCrossSolved(
         currentLivePattern as unknown as { patternData: Record<string, any> },
         solvedPattern as unknown as { patternData: Record<string, any> },
+      );
+    const crossTargetGoalMatch =
+      !isFreeMode &&
+      stage === "cross" &&
+      solvedTargetPattern &&
+      isCrossSolved(
+        currentLivePattern as unknown as { patternData: Record<string, any> },
+        solvedTargetPattern as unknown as { patternData: Record<string, any> },
       );
     const f2lGoalMatch =
       !isFreeMode &&
@@ -3468,7 +3497,13 @@ function App() {
     if (
       freeModeGoalMatch ||
       (!isFreeMode &&
-        (exactMatch || crossGoalMatch || f2lGoalMatch || ollGoalMatch || pllGoalMatch || stageGoalMatch))
+        (exactMatch ||
+          crossGoalMatch ||
+          crossTargetGoalMatch ||
+          f2lGoalMatch ||
+          ollGoalMatch ||
+          pllGoalMatch ||
+          stageGoalMatch))
     ) {
       const totalMs = timerStartAt !== null ? performance.now() - timerStartAt : timerElapsedMs;
       if (!isFreeMode && activeCaseWithTrainingSetup.stage !== "cross") {
