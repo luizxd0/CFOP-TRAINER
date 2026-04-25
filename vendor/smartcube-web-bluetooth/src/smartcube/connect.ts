@@ -12,6 +12,15 @@ import type { MacAddressProvider, SmartCubeConnection, SmartCubeEvent } from './
 import { CubieCube } from './cubie-cube';
 import { getRegisteredProtocols } from './protocol';
 
+const SMARTCUBE_CONNECT_DEBUG = true;
+
+function connectDebug(...args: unknown[]): void {
+    if (!SMARTCUBE_CONNECT_DEBUG || typeof console === 'undefined') {
+        return;
+    }
+    console.log('[smartcube-connect]', ...args);
+}
+
 /**
  * MoYu-style payloads always yield 54-char FACELETS from {U,F,R,B,L,D} even when AES decrypt is wrong;
  * event-type checks are insufficient. A legal 3×3 state requires consistent sticker counts + geometry.
@@ -23,8 +32,8 @@ function isMacCacheProofEvent(e: SmartCubeEvent): boolean {
     return e.type === 'MOVE' && e.move.trim().length > 0;
 }
 
-const MAC_VERIFY_TIMEOUT_MS = 10_000;
-const MAC_VERIFY_RETRY_TIMEOUT_MS = 15_000;
+const MAC_VERIFY_TIMEOUT_MS = 1_500;
+const MAC_VERIFY_RETRY_TIMEOUT_MS = 2_000;
 const EVENT_REPLAY_BUFFER = 96;
 
 /**
@@ -142,6 +151,11 @@ export async function connectSmartCube(
 ): Promise<SmartCubeConnection> {
     const opts = normalizeOptions(arg);
     const protocols = getRegisteredProtocols();
+    connectDebug('connectSmartCube start', {
+        deviceSelection: opts.deviceSelection,
+        deviceName: opts.deviceName,
+        enableAddressSearch: opts.enableAddressSearch,
+    });
 
     if (protocols.length === 0) {
         throw new Error('No smartcube protocols registered');
@@ -154,17 +168,23 @@ export async function connectSmartCube(
     opts.onStatus?.('Select your cube…');
 
     const device = await (navigator as Navigator & { bluetooth: Bluetooth }).bluetooth.requestDevice(requestOptions);
+    connectDebug('device selected', { name: device.name, id: device.id });
 
     opts.onStatus?.('Reading advertisements…');
     const advertisementManufacturerData = await waitForManufacturerData(
         device,
         opts.enableAddressSearch ? 8000 : 2500
     );
+    connectDebug('advertisement data received', {
+        hasManufacturerData: !!advertisementManufacturerData,
+    });
 
     opts.onStatus?.('Connecting…');
     const serviceUuids = await collectPrimaryServiceUuids(device);
+    connectDebug('primary services', [...serviceUuids]);
 
     const protocol = resolveProtocolByGatt(protocols, serviceUuids, device);
+    connectDebug('resolved protocol', protocol ? 'matched' : 'none');
 
     if (!protocol) {
         try {
@@ -186,7 +206,14 @@ export async function connectSmartCube(
     let conn: SmartCubeConnection;
     try {
         conn = await protocol.connect(device, opts.macAddressProvider, context);
+        connectDebug('protocol connect success', {
+            deviceName: conn.deviceName,
+            deviceMAC: conn.deviceMAC,
+            protocol: conn.protocol,
+            capabilities: conn.capabilities,
+        });
     } catch (e) {
+        connectDebug('protocol connect failed', e);
         try {
             device.gatt?.disconnect();
         } catch {
@@ -228,6 +255,7 @@ export async function connectSmartCube(
 
     if (conn.deviceMAC) {
         let verified = false;
+        connectDebug('starting verification', { deviceMAC: conn.deviceMAC });
         opts.onStatus?.('Verifying connection…');
         try {
             const verifyPromise = waitForVerifiedCubeEvent(
@@ -238,7 +266,9 @@ export async function connectSmartCube(
             requestFreshStateForMacVerify(bridgedConn);
             await verifyPromise;
             verified = true;
+            connectDebug('verification success');
         } catch (e) {
+            connectDebug('verification error', e);
             const aborted = e instanceof DOMException && e.name === 'AbortError';
             if (aborted) {
                 try {
@@ -251,10 +281,16 @@ export async function connectSmartCube(
             if (e instanceof TimeoutError) {
                 // Some devices only emit first proof packet after a physical turn.
                 opts.onStatus?.('Waiting for first cube packet… turn one face to confirm connection');
+                connectDebug('verification timed out, returning unverified connection');
+                removeCachedMacForDevice(device);
+                opts.onStatus?.('Connected. Waiting for cube data...');
+                return bridgedConn;
                 try {
                     await waitForVerifiedCubeEvent(bridgedConn, MAC_VERIFY_RETRY_TIMEOUT_MS, opts.signal);
                     verified = true;
-                } catch (retryError) {
+                    connectDebug('verification retry success');
+                } catch (retryError: any) {
+                    connectDebug('verification retry failed', retryError);
                     const retryAborted =
                         retryError instanceof DOMException && retryError.name === 'AbortError';
                     if (retryAborted) {
@@ -265,10 +301,16 @@ export async function connectSmartCube(
                         }
                         throw retryError;
                     }
-                    // Keep connection alive; avoid persisting possibly wrong MAC when proof was not observed.
+                    // Do not keep a half-connected session alive. If we never observe
+                    // valid FACELETS/MOVE traffic, the MAC is likely wrong or the
+                    // protocol never fully initialized.
                     removeCachedMacForDevice(device);
-                    opts.onStatus?.('Connected (verification timed out; data may appear after first move)');
-                    return bridgedConn;
+                    try {
+                        await bridgedConn.disconnect();
+                    } catch {
+                        /* ignore */
+                    }
+                    throw new Error('Timed out waiting for cube data. Check the Bluetooth MAC address and try again.');
                 }
             } else {
                 removeCachedMacForDevice(device);
@@ -282,6 +324,10 @@ export async function connectSmartCube(
         }
         if (verified) {
             setCachedMacForDevice(device, conn.deviceMAC);
+            connectDebug('cached verified MAC', {
+                deviceId: device.id,
+                deviceMAC: conn.deviceMAC,
+            });
         }
     }
     return bridgedConn;

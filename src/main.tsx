@@ -26,7 +26,7 @@ import {
   type SmartCubeConnection,
 } from "../vendor/smartcube-web-bluetooth/src/smartcube/index";
 import type { MacAddressProvider } from "../vendor/smartcube-web-bluetooth/src/smartcube/types";
-import { CubieCube } from "../vendor/smartcube-web-bluetooth/src/smartcube/cubie-cube";
+import { CubieCube, SOLVED_FACELET } from "../vendor/smartcube-web-bluetooth/src/smartcube/cubie-cube";
 import {
   buildContextForStage,
   casesForStage,
@@ -845,6 +845,14 @@ function webBluetoothBlockReason(): string | null {
 }
 
 const SMARTCUBE_MANUAL_MAC_KEY = "smartcubeManualMacByDevice:";
+const SMARTCUBE_DEBUG = true;
+
+function smartCubeDebug(...args: unknown[]): void {
+  if (!SMARTCUBE_DEBUG || typeof console === "undefined") {
+    return;
+  }
+  console.log("[smartcube]", ...args);
+}
 
 function normalizeMacAddress(input: string): string | null {
   const compact = input.replace(/[^0-9a-fA-F]/g, "").toUpperCase();
@@ -870,6 +878,10 @@ function storeManualMacForDevice(device: BluetoothDevice, mac: string): void {
   }
   const key = `${SMARTCUBE_MANUAL_MAC_KEY}${device.id}`;
   window.localStorage.setItem(key, mac);
+}
+
+function maskFacelets(facelets: string): string {
+  return facelets.length <= 18 ? facelets : `${facelets.slice(0, 18)}...`;
 }
 
 function CubeViewer({
@@ -1536,6 +1548,7 @@ function SmartCubePanel({
   onFacelets,
   onConnectionChange,
   onResetLiveState,
+  liveStateReady,
   cubeOrientation,
   freeLastSolves,
 }: {
@@ -1544,6 +1557,7 @@ function SmartCubePanel({
   onFacelets?: (facelets: string) => void;
   onConnectionChange?: (connected: boolean) => void;
   onResetLiveState?: () => void;
+  liveStateReady: boolean;
   cubeOrientation: CubeOrientation;
   freeLastSolves: FreeSolveRecord[];
 }) {
@@ -1563,10 +1577,62 @@ function SmartCubePanel({
   const [showBluetoothDetails, setShowBluetoothDetails] = useState(false);
   const smartRef = useRef<SmartCubeConnection | null>(null);
   const smartSubscriptionRef = useRef<{ unsubscribe: () => void } | null>(null);
+  const initialFaceletsSeenRef = useRef(false);
+  const initialFaceletsSyncTimerRef = useRef<number | null>(null);
+  const initialFaceletsSyncAttemptsRef = useRef(0);
   const gyroBasisForMovesRef = useRef<THREE.Quaternion | null>(null);
   const gyroRelativeForMovesRef = useRef<THREE.Quaternion>(new THREE.Quaternion());
   const yellowTopRotationRef = useRef(
     new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0, Math.PI)),
+  );
+  const clearInitialFaceletsSync = useCallback(() => {
+    if (initialFaceletsSyncTimerRef.current !== null) {
+      window.clearTimeout(initialFaceletsSyncTimerRef.current);
+      initialFaceletsSyncTimerRef.current = null;
+    }
+  }, []);
+  const scheduleInitialFaceletsSync = useCallback(
+    (conn: SmartCubeConnection, delayMs: number) => {
+      clearInitialFaceletsSync();
+      smartCubeDebug("schedule facelets sync", {
+        protocol: conn.protocol.name,
+        delayMs,
+        attempt: initialFaceletsSyncAttemptsRef.current + 1,
+        liveStateReady,
+      });
+      initialFaceletsSyncTimerRef.current = window.setTimeout(() => {
+        if (
+          smartRef.current !== conn ||
+          liveStateReady ||
+          !conn.capabilities.facelets
+        ) {
+          return;
+        }
+
+        const attempt = initialFaceletsSyncAttemptsRef.current + 1;
+        initialFaceletsSyncAttemptsRef.current = attempt;
+        smartCubeDebug("requesting facelets", {
+          protocol: conn.protocol.name,
+          attempt,
+          seenFirstFacelets: initialFaceletsSeenRef.current,
+        });
+        if (attempt === 1) {
+          setStatus(`Connected via ${conn.protocol.name}. Syncing cube state...`);
+        } else if (attempt === 5) {
+          setStatus(`Connected via ${conn.protocol.name}. Still waiting for cube state...`);
+        }
+
+        void conn.sendCommand({ type: "REQUEST_FACELETS" }).catch(() => {
+          // Keep retrying in the background if the cube is still settling.
+        });
+
+        if (smartRef.current !== conn || liveStateReady) {
+          return;
+        }
+        scheduleInitialFaceletsSync(conn, Math.min(3500, 900 + attempt * 450));
+      }, delayMs);
+    },
+    [clearInitialFaceletsSync, liveStateReady],
   );
   const emitMove = useCallback(
     (move: { raw: string; display: string }) => {
@@ -1629,12 +1695,13 @@ function SmartCubePanel({
       }
       void smartRef.current?.disconnect();
       smartRef.current = null;
+      clearInitialFaceletsSync();
       gyroBasisForMovesRef.current = null;
       gyroRelativeForMovesRef.current.identity();
       emitConnectionChange(false);
       emitGyro(null);
     };
-  }, [emitConnectionChange, emitGyro]);
+  }, [clearInitialFaceletsSync, emitConnectionChange, emitGyro]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -1650,32 +1717,31 @@ function SmartCubePanel({
 
   const customMacAddressProvider = useCallback<MacAddressProvider>(async (device, isFallbackCall) => {
     const cachedManualMac = readManualMacForDevice(device);
+    smartCubeDebug("mac provider called", {
+      deviceName: device.name ?? "Unknown",
+      deviceId: device.id,
+      isFallbackCall: isFallbackCall === true,
+      cachedManualMac,
+    });
     if (!isFallbackCall) {
-      // Let automatic discovery run first; provide cached manual MAC if we already have one.
-      return cachedManualMac;
-    }
-
-    const fallbackHint =
-      typeof device.watchAdvertisements !== "function"
-        ? "\n\nTip: auto discovery can improve if Chrome enables:\nchrome://flags/#enable-experimental-web-platform-features"
-        : "";
-    const userInput = window.prompt(
-      `Unable to determine cube MAC address automatically.\nEnter your cube MAC (format AA:BB:CC:DD:EE:FF).${fallbackHint}`,
-      cachedManualMac ?? "",
-    );
-    if (!userInput) {
+      // Always let automatic discovery run first. A stale manual MAC can produce
+      // a "connected but no move data" session on GAN cubes.
       return null;
     }
-    const normalized = normalizeMacAddress(userInput);
-    if (!normalized) {
-      window.alert("Invalid MAC format. Use 12 hex digits (AA:BB:CC:DD:EE:FF).");
-      return null;
-    }
-    storeManualMacForDevice(device, normalized);
-    return normalized;
+    smartCubeDebug("manual MAC prompt suppressed", {
+      deviceName: device.name ?? "Unknown",
+      deviceId: device.id,
+    });
+    return null;
   }, []);
 
   function attachSmartConnection(conn: SmartCubeConnection) {
+    smartCubeDebug("attach connection", {
+      protocol: conn.protocol.name,
+      deviceName: conn.deviceName,
+      deviceMAC: conn.deviceMAC,
+      capabilities: conn.capabilities,
+    });
     smartRef.current = conn;
     const nextName = conn.deviceName || "Smart cube";
     setDeviceName(nextName);
@@ -1684,6 +1750,9 @@ function SmartCubePanel({
     setStatus(`Connected via ${conn.protocol.name}`);
     setIsConnected(true);
     setShowBluetoothDetails(false);
+    initialFaceletsSeenRef.current = false;
+    initialFaceletsSyncAttemptsRef.current = 0;
+    clearInitialFaceletsSync();
     gyroBasisForMovesRef.current = null;
     gyroRelativeForMovesRef.current.identity();
     emitConnectionChange(true);
@@ -1704,6 +1773,7 @@ function SmartCubePanel({
             if (!move) {
               break;
             }
+            smartCubeDebug("move event", { move, timestamp: event.timestamp });
             const orientedMove = remapMoveForOrientation(move, cubeOrientation);
             emitMove({
               raw: move,
@@ -1712,6 +1782,18 @@ function SmartCubePanel({
           }
           break;
         case "FACELETS":
+          smartCubeDebug("facelets event", {
+            timestamp: event.timestamp,
+            preview: maskFacelets(event.facelets),
+            liveStateReady,
+          });
+          if (!initialFaceletsSeenRef.current) {
+            initialFaceletsSeenRef.current = true;
+            initialFaceletsSyncAttemptsRef.current = 0;
+            if (!liveStateReady) {
+              setStatus(`Connected via ${conn.protocol.name}. Syncing cube state...`);
+            }
+          }
           emitFacelets(event.facelets);
           break;
         case "GYRO":
@@ -1759,6 +1841,10 @@ function SmartCubePanel({
           setBattery(event.batteryLevel);
           break;
         case "DISCONNECT":
+          smartCubeDebug("disconnect event");
+          clearInitialFaceletsSync();
+          initialFaceletsSeenRef.current = false;
+          initialFaceletsSyncAttemptsRef.current = 0;
           setStatus("Disconnected");
           setIsConnected(false);
           setShowBluetoothDetails(false);
@@ -1779,59 +1865,22 @@ function SmartCubePanel({
       void conn.sendCommand({ type: "REQUEST_HARDWARE" });
     }
     if (conn.capabilities.facelets) {
-      void conn.sendCommand({ type: "REQUEST_FACELETS" });
-      void syncInitialCubeState(conn);
+      scheduleInitialFaceletsSync(conn, 120);
     }
   }
 
-  function waitForFaceletsEvent(conn: SmartCubeConnection, timeoutMs: number): Promise<boolean> {
-    return new Promise((resolve) => {
-      let settled = false;
-      let timer: number | null = null;
-      const finish = (result: boolean) => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        if (timer !== null) {
-          window.clearTimeout(timer);
-        }
-        sub.unsubscribe();
-        resolve(result);
-      };
-
-      const sub = conn.events$.subscribe((event) => {
-        if (event.type === "FACELETS") {
-          finish(true);
-          return;
-        }
-        if (event.type === "DISCONNECT") {
-          finish(false);
-        }
-      });
-
-      timer = window.setTimeout(() => finish(false), timeoutMs);
-    });
-  }
-
-  async function syncInitialCubeState(conn: SmartCubeConnection): Promise<void> {
-    if (!conn.capabilities.facelets) {
+  useEffect(() => {
+    const conn = smartRef.current;
+    if (!isConnected || !conn || !conn.capabilities.facelets) {
       return;
     }
-    // Some cubes can miss the first state packet right after pairing; retry a few requests.
-    for (let attempt = 0; attempt < 4; attempt += 1) {
-      try {
-        await conn.sendCommand({ type: "REQUEST_FACELETS" });
-      } catch {
-        // Keep trying; protocol drivers may transiently reject writes while settling.
-      }
-      const received = await waitForFaceletsEvent(conn, 900 + attempt * 350);
-      if (received) {
-        return;
-      }
+    if (liveStateReady) {
+      clearInitialFaceletsSync();
+      setStatus(`Connected via ${conn.protocol.name}`);
+      return;
     }
-    setStatus("Connected, but initial cube state is pending. Turn one face to force sync.");
-  }
+    scheduleInitialFaceletsSync(conn, initialFaceletsSeenRef.current ? 250 : 120);
+  }, [clearInitialFaceletsSync, isConnected, liveStateReady, scheduleInitialFaceletsSync]);
 
   async function connectUsingSmartCubeApi() {
     const connectOptions = {
@@ -1870,6 +1919,9 @@ function SmartCubePanel({
       return;
     }
     try {
+      smartCubeDebug("connectCube start", {
+        preferredDeviceName,
+      });
       setStatus("Opening Bluetooth picker...");
       setDeviceMac("Unknown");
       setBattery(null);
@@ -1879,9 +1931,10 @@ function SmartCubePanel({
       emitGyro(null);
       await connectUsingSmartCubeApi();
     } catch (error) {
+      smartCubeDebug("connectCube error", error);
       if (isMissingCubeMacError(error)) {
         setStatus(
-          "Cube MAC auto-detect failed. Retry and allow manual MAC prompt, keep only your cube powered nearby, and ensure Android Chrome runs on HTTPS.",
+          "Cube MAC auto-detect failed. Keep only your cube powered nearby and ensure Android Chrome runs on HTTPS.",
         );
         return;
       }
@@ -1899,11 +1952,12 @@ function SmartCubePanel({
     if (smartRef.current) {
       if (!smartRef.current.capabilities.reset) {
         emitResetLiveState();
-        emitGyro(null);
-        setOrientation("Waiting for gyro data");
-        gyroBasisForMovesRef.current = null;
-        gyroRelativeForMovesRef.current.identity();
-        setStatus("Cube reset locally (device reset not supported by this protocol)");
+      emitGyro(null);
+      setOrientation("Waiting for gyro data");
+      clearInitialFaceletsSync();
+      gyroBasisForMovesRef.current = null;
+      gyroRelativeForMovesRef.current.identity();
+      setStatus("Cube reset locally (device reset not supported by this protocol)");
         return;
       }
       try {
@@ -1912,6 +1966,7 @@ function SmartCubePanel({
         emitResetLiveState();
         emitGyro(null);
         setOrientation("Waiting for gyro data");
+        clearInitialFaceletsSync();
         gyroBasisForMovesRef.current = null;
         gyroRelativeForMovesRef.current.identity();
         return;
@@ -1924,6 +1979,7 @@ function SmartCubePanel({
     emitResetLiveState();
     emitGyro(null);
     setOrientation("Waiting for gyro data");
+    clearInitialFaceletsSync();
     gyroBasisForMovesRef.current = null;
     gyroRelativeForMovesRef.current.identity();
     setStatus("Cube state reset locally (no device connected)");
@@ -1936,6 +1992,9 @@ function SmartCubePanel({
     }
     void smartRef.current?.disconnect();
     smartRef.current = null;
+    clearInitialFaceletsSync();
+    initialFaceletsSeenRef.current = false;
+    initialFaceletsSyncAttemptsRef.current = 0;
     setStatus("Disconnected");
     setIsConnected(false);
     setShowBluetoothDetails(false);
@@ -2061,6 +2120,14 @@ function AlgorithmCard({
   cubeOrientation: CubeOrientation;
 }) {
   const isCross = activeCase.stage === "cross";
+  const setupLabel =
+    activeCase.stage === "cross"
+      ? "Cross setup scramble (from solved)"
+      : activeCase.stage === "f2l"
+        ? "Training scramble (cross-ready)"
+        : activeCase.stage === "oll"
+          ? "Training scramble (F2L-ready)"
+          : "Training scramble (OLL-ready)";
   const [showSetup, setShowSetup] = useState(true);
   const [showCaseSetup, setShowCaseSetup] = useState(false);
   const [showSolution, setShowSolution] = useState(false);
@@ -2089,7 +2156,7 @@ function AlgorithmCard({
 
       <div className="alg-block">
         <div className="alg-title">
-          <span>{isCross ? "Cross setup scramble (from solved)" : "Training scramble (from solved)"}</span>
+          <span>{setupLabel}</span>
           <button onClick={() => setShowSetup((value) => !value)}>
             {showSetup ? <EyeOff size={16} /> : <Eye size={16} />}
           </button>
@@ -2098,7 +2165,7 @@ function AlgorithmCard({
         <p>
           {isCross
             ? "Generated by exact search for the selected optimal cross move count."
-            : "Context is mixed on purpose so finishing the case does not end in solved."}
+            : "Context is mixed on purpose so each rep stays in CFOP flow instead of resetting to fully solved every time."}
         </p>
       </div>
 
@@ -2225,7 +2292,9 @@ function App() {
   const [liveSessionMoveCount, setLiveSessionMoveCount] = useState(0);
   const [liveSessionStartMoves, setLiveSessionStartMoves] = useState<string[]>([]);
   const [trainingSessionId, setTrainingSessionId] = useState(0);
+  const [virtualSessionStartAlg, setVirtualSessionStartAlg] = useState("");
   const [sessionAwareSetupAlg, setSessionAwareSetupAlg] = useState<string | null>(null);
+  const [smartCubeStateBootstrapped, setSmartCubeStateBootstrapped] = useState(false);
   const [smartCubeGyro, setSmartCubeGyro] = useState<GyroQuaternion | null>(null);
   const [smartCubeGyroSession, setSmartCubeGyroSession] = useState(0);
   const [setupGuideSteps, setSetupGuideSteps] = useState<GuideStepInternal[]>([]);
@@ -2258,11 +2327,13 @@ function App() {
   const timerRunningRef = useRef(false);
   const timerStartAtRef = useRef<number | null>(null);
   const attemptFinishedRef = useRef(false);
+  const autoAdvanceTimeoutRef = useRef<number | null>(null);
   const prevSetupGuideCompleteRef = useRef(false);
   const prevAttemptFinishedRef = useRef(false);
   const pendingFaceletsBootstrapRef = useRef(false);
   const pendingFaceletsValueRef = useRef<string | null>(null);
   const bootstrappingFaceletsRef = useRef(false);
+  const solvedFaceletsBootstrapStreakRef = useRef(0);
   const queuedPracticeCaseIdRef = useRef<string | null>(null);
   const [difficulty, setDifficulty] = useState<number | "all">(1);
   const [selectedCaseId, setSelectedCaseId] = useState("cross-1");
@@ -2546,6 +2617,10 @@ function App() {
     [solution],
   );
   const targetSetupAlgCanonical = isFreeMode ? freeScramble : activeCaseWithTrainingSetup.setup;
+  const expectedPostAttemptAlg = useMemo(
+    () => simplifyAlgText(joinAlgs([targetSetupAlgCanonical, solutionForPattern])),
+    [solutionForPattern, targetSetupAlgCanonical],
+  );
   const setupAlgForOrientation = useMemo(
     () => activeCaseWithTrainingSetup.setup,
     [activeCaseWithTrainingSetup.setup],
@@ -2569,9 +2644,7 @@ function App() {
   const targetSetupAlgForOrientation = isFreeMode ? freeScramble : setupAlgForOrientation;
   const setupGuideAlg = useMemo(
     () => {
-      const raw = smartCubeConnected
-        ? (sessionAwareSetupAlg ?? targetSetupAlgForOrientation)
-        : targetSetupAlgForOrientation;
+      const raw = sessionAwareSetupAlg ?? targetSetupAlgForOrientation;
       return simplifyAlgText(smartCubeConnected ? stripCubeRotations(raw) : raw);
     },
     [sessionAwareSetupAlg, smartCubeConnected, targetSetupAlgForOrientation],
@@ -2845,6 +2918,8 @@ function App() {
     setSmartCubeMoves([]);
     smartCubeMovesRef.current = [];
     setLiveSessionStartMoves([]);
+    setVirtualSessionStartAlg("");
+    setSmartCubeStateBootstrapped(false);
     setLiveSessionMoveCount(0);
     setSmartCubeDisplayMoves([]);
     setSessionAwareSetupAlg(null);
@@ -2871,6 +2946,7 @@ function App() {
   const resetTrainingSessionFromCurrentState = useCallback(() => {
     const currentMoves = [...smartCubeMovesRef.current];
     setLiveSessionStartMoves(currentMoves);
+    setSmartCubeStateBootstrapped(currentMoves.length > 0);
     setLiveSessionMoveCount(0);
     setSmartCubeDisplayMoves([]);
     setSessionAwareSetupAlg(null);
@@ -2907,8 +2983,15 @@ function App() {
     if (!facelets) {
       return;
     }
+    const faceletsLookSolved = facelets === SOLVED_FACELET;
+    smartCubeDebug("bootstrap start", {
+      preview: maskFacelets(facelets),
+      faceletsLookSolved,
+      solvedBootstrapStreak: solvedFaceletsBootstrapStreakRef.current,
+    });
     const pattern = patternFromFacelets(facelets, cubeKpuzzle);
     if (!pattern) {
+      smartCubeDebug("bootstrap parse failed");
       return;
     }
     bootstrappingFaceletsRef.current = true;
@@ -2916,9 +2999,30 @@ function App() {
       .then((solveToSolved) => {
         const fromSolved = new Alg(stripCubeRotations(solveToSolved.toString())).invert().toString();
         const nextMoves = splitAlgTokens(fromSolved).slice(-500);
+        const looksSolvedAfterBootstrap = nextMoves.length === 0;
+        if (faceletsLookSolved && looksSolvedAfterBootstrap) {
+          solvedFaceletsBootstrapStreakRef.current += 1;
+          smartCubeDebug("bootstrap solved facelets candidate", {
+            streak: solvedFaceletsBootstrapStreakRef.current,
+            solveToSolved: solveToSolved.toString(),
+          });
+          if (solvedFaceletsBootstrapStreakRef.current < 3) {
+            setSmartCubeStateBootstrapped(false);
+            return;
+          }
+        } else {
+          solvedFaceletsBootstrapStreakRef.current = 0;
+        }
+        smartCubeDebug("bootstrap success", {
+          solveToSolved: solveToSolved.toString(),
+          fromSolved,
+          moveCount: nextMoves.length,
+          faceletsLookSolved,
+        });
         setSmartCubeMoves(nextMoves);
         smartCubeMovesRef.current = nextMoves;
         setLiveSessionStartMoves([...nextMoves]);
+        setSmartCubeStateBootstrapped(true);
         setLiveSessionMoveCount(0);
         setSmartCubeDisplayMoves([]);
         setSessionAwareSetupAlg(null);
@@ -2937,8 +3041,10 @@ function App() {
         setTimerElapsedMs(0);
         freeLastSplitMoveCountRef.current = 0;
       })
-      .catch(() => {
-        // Ignore bootstrap errors and keep move-based tracking.
+      .catch((error) => {
+        smartCubeDebug("bootstrap failed", error);
+        solvedFaceletsBootstrapStreakRef.current = 0;
+        setSmartCubeStateBootstrapped(false);
       })
       .finally(() => {
         pendingFaceletsBootstrapRef.current = false;
@@ -2947,6 +3053,9 @@ function App() {
   }, [cubeKpuzzle, smartCubeConnected]);
 
   const handleSmartCubeFacelets = useCallback((facelets: string) => {
+    smartCubeDebug("handle facelets", {
+      preview: maskFacelets(facelets),
+    });
     pendingFaceletsValueRef.current = facelets;
     attemptFaceletsBootstrap();
   }, [attemptFaceletsBootstrap]);
@@ -2958,6 +3067,8 @@ function App() {
   const handleSmartCubeConnectionChange = useCallback((connected: boolean) => {
     setSmartCubeConnected(connected);
     if (connected) {
+      setSmartCubeStateBootstrapped(false);
+      solvedFaceletsBootstrapStreakRef.current = 0;
       pendingFaceletsBootstrapRef.current = true;
       pendingFaceletsValueRef.current = null;
       setSmartCubeGyroSession((current) => current + 1);
@@ -2967,6 +3078,8 @@ function App() {
     }
     pendingFaceletsBootstrapRef.current = false;
     pendingFaceletsValueRef.current = null;
+    setSmartCubeStateBootstrapped(false);
+    solvedFaceletsBootstrapStreakRef.current = 0;
     setSmartCubeGyro(null);
     hardResetLiveCubeState();
   }, [hardResetLiveCubeState, resetTrainingSessionFromCurrentState]);
@@ -2974,6 +3087,8 @@ function App() {
   const handleSmartCubeResetLiveState = useCallback(() => {
     pendingFaceletsBootstrapRef.current = false;
     pendingFaceletsValueRef.current = null;
+    setSmartCubeStateBootstrapped(false);
+    solvedFaceletsBootstrapStreakRef.current = 0;
     hardResetLiveCubeState();
     setSmartCubeGyro(null);
     setSmartCubeGyroSession((current) => current + 1);
@@ -3364,8 +3479,19 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (!smartCubeConnected) {
+    if (isFreeMode) {
       setSessionAwareSetupAlg(null);
+      return;
+    }
+
+    if (!smartCubeConnected) {
+      const normalizeToSolved =
+        virtualSessionStartAlg.trim().length > 0
+          ? new Alg(virtualSessionStartAlg).invert().toString()
+          : "";
+      setSessionAwareSetupAlg(
+        simplifyAlgText(joinAlgs([normalizeToSolved, targetSetupAlgCanonical])),
+      );
       return;
     }
     let cancelled = false;
@@ -3434,6 +3560,7 @@ function App() {
     };
   }, [
     cubeKpuzzle,
+    isFreeMode,
     liveSessionStartAlgCanonical,
     targetSetupAlgCanonical,
     activeCase.baseSetup,
@@ -3441,7 +3568,16 @@ function App() {
     stage,
     smartCubeConnected,
     trainingSessionId,
+    virtualSessionStartAlg,
   ]);
+
+  useEffect(() => {
+    if (!smartCubeConnected) {
+      setLiveSessionStartMoves([]);
+      return;
+    }
+    setVirtualSessionStartAlg("");
+  }, [smartCubeConnected]);
 
   useEffect(() => {
     const nextSteps = buildGuideStepsFromAlg(setupGuideAlg);
@@ -3879,6 +4015,32 @@ function App() {
     setSelectedCaseId(next.id);
   }
 
+  const repeatCurrentTrainingCase = useCallback(() => {
+    setVirtualSessionStartAlg(expectedPostAttemptAlg);
+    resetTrainingSessionFromCurrentState();
+    if (stage === "cross") {
+      setCrossRefresh((value) => value + 1);
+      return;
+    }
+    setContextAlg(buildContextForStage(stage));
+  }, [expectedPostAttemptAlg, resetTrainingSessionFromCurrentState, stage]);
+
+  useEffect(() => {
+    if (view !== "training" || isFreeMode || !attemptFinished) {
+      return;
+    }
+    const timeout = window.setTimeout(() => {
+      repeatCurrentTrainingCase();
+    }, 1200);
+    autoAdvanceTimeoutRef.current = timeout;
+    return () => {
+      if (autoAdvanceTimeoutRef.current !== null) {
+        window.clearTimeout(autoAdvanceTimeoutRef.current);
+        autoAdvanceTimeoutRef.current = null;
+      }
+    };
+  }, [attemptFinished, isFreeMode, repeatCurrentTrainingCase, view]);
+
   if (view === "training") {
     return (
       <main className="app-shell-training">
@@ -4180,6 +4342,7 @@ function App() {
             onFacelets={handleSmartCubeFacelets}
             onConnectionChange={handleSmartCubeConnectionChange}
             onResetLiveState={handleSmartCubeResetLiveState}
+            liveStateReady={smartCubeStateBootstrapped}
             cubeOrientation={cubeOrientation}
             freeLastSolves={freeLastSolves}
           />
