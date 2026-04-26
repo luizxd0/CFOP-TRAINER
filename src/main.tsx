@@ -359,7 +359,7 @@ function App() {
       setVirtualSessionStartAlg(expectedPostAttemptAlg);
       resetTrainingSessionFromCurrentStateRef.current?.();
     }
-    setSmartCubeMoves((current) => [...current, move.raw].slice(-500));
+    setSmartCubeMoves((current) => [...current, move.raw]);
     liveSessionCountTokensRef.current = appendLiveCountMoveTokens(liveSessionCountTokensRef.current, move.raw);
     setLiveSessionMoveCount(liveSessionCountTokensRef.current.length);
     if (setupGuideCompleteRef.current) {

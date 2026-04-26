@@ -67,7 +67,7 @@ export function useSmartCubeBootstrap(params: UseSmartCubeBootstrapParams) {
     void experimentalSolve3x3x3IgnoringCenters(pattern)
       .then((solveToSolved) => {
         const fromSolved = new Alg(stripCubeRotations(solveToSolved.toString())).invert().toString();
-        const nextMoves = splitAlgTokens(fromSolved).slice(-500);
+        const nextMoves = splitAlgTokens(fromSolved);
         const looksSolvedAfterBootstrap = nextMoves.length === 0;
         if (faceletsLookSolved && looksSolvedAfterBootstrap) {
           solvedFaceletsBootstrapStreakRef.current += 1;
