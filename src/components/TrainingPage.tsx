@@ -56,7 +56,6 @@ export function TrainingPage({
   setupGuideAlg,
   timerRunning,
   freeInspectionRunning,
-  showFreeTimerInHeadline,
   isDemoViewer,
   smartCubeDisplayMoves,
   setupGuideComplete,
@@ -119,7 +118,6 @@ export function TrainingPage({
   setupGuideAlg: string;
   timerRunning: boolean;
   freeInspectionRunning: boolean;
-  showFreeTimerInHeadline: boolean;
   isDemoViewer: boolean;
   smartCubeDisplayMoves: string[];
   setupGuideComplete: boolean;
@@ -379,8 +377,8 @@ export function TrainingPage({
           alg={viewerAlg}
           contextMoves={viewerContextMoves}
           headlineAlg={setupGuideAlg}
-          timerInHeadline={isFreeMode}
-          headlineTimerActive={isFreeMode && (timerRunning || freeInspectionRunning || showFreeTimerInHeadline)}
+          timerInHeadline={isFreeMode && (timerRunning || freeInspectionRunning)}
+          headlineTimerActive={isFreeMode && (timerRunning || freeInspectionRunning)}
           cubeOrientation={cubeOrientation}
           cubeSkin={cubeSkin}
           mirrorHintsEnabled={mirrorHintsEnabled}

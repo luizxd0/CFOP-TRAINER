@@ -14,6 +14,7 @@ import {
   type CrossSide,
 } from "./lib/cubeState";
 import {
+  remapAlgForOrientation,
   simplifyAlgText,
   stripCubeRotations,
   type CubeOrientation,
@@ -183,6 +184,7 @@ function App() {
   const prevSetupGuideCompleteRef = useRef(false);
   const prevAttemptFinishedRef = useRef(false);
   const queuedPracticeCaseIdRef = useRef<string | null>(null);
+  const setupGuideAlgRef = useRef("");
   const [difficulty, setDifficulty] = useState<number | "all">(1);
   const [selectedCaseId, setSelectedCaseId] = useState("cross-1");
   const [showPanelSolution, setShowPanelSolution] = useState(false);
@@ -324,6 +326,10 @@ function App() {
     cubeKpuzzle,
     attemptStartPattern,
   });
+
+  useEffect(() => {
+    setupGuideAlgRef.current = setupGuideAlg;
+  }, [setupGuideAlg]);
   const {
     timerLabel,
     freeInspectionText,
@@ -448,6 +454,7 @@ function App() {
   const handleSmartCubeMove = useCallback((move: { raw: string; display: string }) => {
     if (isFreeMode && attemptFinishedRef.current) {
       resetTrainingSessionFromCurrentStateRef.current?.();
+      return;
     }
     if (attemptFinishedRef.current && !isFreeMode) {
       setVirtualSessionStartAlg(expectedPostAttemptAlg);
@@ -524,7 +531,7 @@ function App() {
     setLiveSessionStartMoves(currentMoves);
     liveSessionCountTokensRef.current = [];
     setSmartCubeStateBootstrapped(currentMoves.length > 0);
-    const nextSteps = buildGuideStepsFromAlg(setupGuideAlg);
+    const nextSteps = buildGuideStepsFromAlg(setupGuideAlgRef.current);
     setSetupGuideSteps(nextSteps);
     const complete = nextSteps.length === 0;
     setSetupGuideComplete(complete);
@@ -555,7 +562,7 @@ function App() {
       freeSolveLoggedRef,
       preserveDisplayMoves: true,
     });
-  }, [setupGuideAlg]);
+  }, []);
   useEffect(() => {
     resetTrainingSessionFromCurrentStateRef.current = resetTrainingSessionFromCurrentState;
   }, [resetTrainingSessionFromCurrentState]);
@@ -611,7 +618,7 @@ function App() {
   const {
     handleStageChange,
     handleFreeMode,
-    handleNewFreeScramble,
+    handleNewFreeScramble: handleNewFreeScrambleFromControls,
     handleDifficultyChange,
     handleCaseChange,
     practiceWeakestSelectedCase,
@@ -632,6 +639,36 @@ function App() {
     setSelectedCaseId,
     setFreeScramble,
   });
+
+  const handleNewFreeScramble = useCallback(() => {
+    if (!isFreeMode) {
+      handleNewFreeScrambleFromControls();
+      return;
+    }
+    const nextScramble = (() => {
+      let next = generateRandomScramble();
+      if (next !== freeScramble) return next;
+      for (let i = 0; i < 4; i += 1) {
+        next = generateRandomScramble();
+        if (next !== freeScramble) {
+          break;
+        }
+      }
+      return next;
+    })();
+    const rawSetupAlg = remapAlgForOrientation(nextScramble, cubeOrientation);
+    setupGuideAlgRef.current = simplifyAlgText(
+      smartCubeConnected ? stripCubeRotations(rawSetupAlg) : rawSetupAlg,
+    );
+    setFreeScramble(nextScramble);
+    resetTrainingSessionFromCurrentStateRef.current?.();
+  }, [
+    cubeOrientation,
+    freeScramble,
+    handleNewFreeScrambleFromControls,
+    isFreeMode,
+    smartCubeConnected,
+  ]);
 
   useEffect(() => {
     setTrainingSubsetFilter("all");
@@ -930,16 +967,16 @@ function App() {
     }
   }, [attemptFinished, isFreeMode, view]);
 
-  if (view === "training") {
-    return (
-      <main className="app-shell-training">
-        <AppHeader
-          view={view}
-          themeMode={themeMode}
-          onViewChange={setView}
-          onToggleTheme={() => setThemeMode((current) => (current === "dark" ? "light" : "dark"))}
-        />
+  return (
+    <main className={view === "training" ? "app-shell-training" : "app-shell"}>
+      <AppHeader
+        view={view}
+        themeMode={themeMode}
+        onViewChange={setView}
+        onToggleTheme={() => setThemeMode((current) => (current === "dark" ? "light" : "dark"))}
+      />
 
+      <section hidden={view !== "training"}>
         <TrainingPage
           isFreeMode={isFreeMode}
           handleFreeMode={handleFreeMode}
@@ -984,7 +1021,6 @@ function App() {
           setupGuideAlg={setupGuideAlg}
           timerRunning={timerRunning}
           freeInspectionRunning={freeInspectionRunning}
-          showFreeTimerInHeadline={shouldShowPersistedFreeTimer}
           isDemoViewer={isDemoViewer}
           smartCubeDisplayMoves={smartCubeDisplayMoves}
           setupGuideComplete={setupGuideComplete}
@@ -1004,20 +1040,9 @@ function App() {
           smartCubeStateBootstrapped={smartCubeStateBootstrapped}
           smartPanelSolves={smartPanelSolves}
         />
-      </main>
-    );
-  }
+      </section>
 
-  return (
-    <main className="app-shell">
-      <AppHeader
-        view={view}
-        themeMode={themeMode}
-        onViewChange={setView}
-        onToggleTheme={() => setThemeMode((current) => (current === "dark" ? "light" : "dark"))}
-      />
-
-      <section className="app-workspace">
+      <section className="app-workspace" hidden={view === "training"}>
         {view === "home" && (
           <HomePage
             totalCaseCount={totalCaseCount}
