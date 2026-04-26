@@ -4,6 +4,7 @@ import {
   areSlotsSolved,
   countSolvedF2LPairs,
   isCrossSolved,
+  isCrossSolvedOnSide,
   isOllSolved,
   isSlotSolved,
   type OrbitSlot,
@@ -270,8 +271,14 @@ export function useAttemptLifecycle(params: UseAttemptLifecycleParams) {
     if (!timerRunning || !currentLivePattern || !smartCubeConnected) return;
     const exactMatch = solvedTargetPattern ? currentLivePattern.isIdentical(solvedTargetPattern) : false;
     const freeModeGoalMatch = isFreeMode && solvedPattern && currentLivePattern.isIdentical(solvedPattern);
-    const crossGoalMatch = !isFreeMode && stage === "cross" && solvedPattern && isCrossSolved(currentLivePattern as unknown as PatternDataLike, solvedPattern as unknown as PatternDataLike);
-    const crossTargetGoalMatch = !isFreeMode && stage === "cross" && solvedTargetPattern && isCrossSolved(currentLivePattern as unknown as PatternDataLike, solvedTargetPattern as unknown as PatternDataLike);
+    const crossGoalMatch = !isFreeMode && stage === "cross" && solvedPattern && (
+      isCrossSolved(currentLivePattern as unknown as PatternDataLike, solvedPattern as unknown as PatternDataLike) ||
+      isCrossSolvedOnSide(currentLivePattern as unknown as PatternDataLike, solvedPattern as unknown as PatternDataLike, "U")
+    );
+    const crossTargetGoalMatch = !isFreeMode && stage === "cross" && solvedTargetPattern && (
+      isCrossSolved(currentLivePattern as unknown as PatternDataLike, solvedTargetPattern as unknown as PatternDataLike) ||
+      isCrossSolvedOnSide(currentLivePattern as unknown as PatternDataLike, solvedTargetPattern as unknown as PatternDataLike, "U")
+    );
     const f2lGoalMatch = !isFreeMode && stage === "f2l" && solvedPattern && (
       ((attemptStartPattern || setupTargetPattern) && countSolvedF2LPairs(currentLivePattern as unknown as PatternDataLike, solvedPattern as unknown as PatternDataLike) > countSolvedF2LPairs((attemptStartPattern ?? setupTargetPattern) as unknown as PatternDataLike, solvedPattern as unknown as PatternDataLike)) ||
       (f2lRequiredSolvedSlots.length > 0 && areSlotsSolved(currentLivePattern as unknown as PatternDataLike, solvedPattern as unknown as PatternDataLike, f2lRequiredSolvedSlots)) ||
