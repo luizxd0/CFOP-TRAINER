@@ -20,6 +20,7 @@ import {
   type CubeOrientation,
 } from "./lib/notation";
 import { resolveStageCaseSetup } from "./lib/practiceEngine";
+import { buildF2LSetupFromCurrentState, normalizeF2LCaseSetup } from "./lib/f2lTrainer";
 import { generateRandomScramble } from "./lib/scramble";
 import {
   buildGuideStepsFromAlg,
@@ -272,10 +273,13 @@ function App() {
       };
     }
 
-    const normalizedCaseSetup = resolveStageCaseSetup(activeCase, cubeKpuzzle);
+    const normalizedCaseSetup =
+      stage === "f2l"
+        ? normalizeF2LCaseSetup(activeCase.setup)
+        : resolveStageCaseSetup(activeCase, cubeKpuzzle);
     const setup = joinAlgs([normalizedCaseSetup]);
     return { ...activeCase, setup };
-  }, [activeCase, cubeKpuzzle, crossDifficulty, crossGenerated, isCross]);
+  }, [activeCase, cubeKpuzzle, crossDifficulty, crossGenerated, isCross, stage]);
 
   useEffect(() => {
     setShowPanelSolution(false);
@@ -309,7 +313,6 @@ function App() {
     solvedTargetPattern,
     requiredSolvedSlots,
     f2lRequiredSolvedSlots,
-    f2lCaseUnsolvedSlots,
   } = useTrainingDerivedState({
     activeCaseWithTrainingSetup,
     isFreeMode,
@@ -324,7 +327,6 @@ function App() {
     liveSessionMoveCount,
     setupGuideSteps,
     cubeKpuzzle,
-    attemptStartPattern,
   });
 
   useEffect(() => {
@@ -484,9 +486,13 @@ function App() {
     }
     setSmartCubeDisplayMoves((current) => (current.length > 0 ? [] : current));
     setSetupGuideSteps((current) =>
-      advanceSetupGuideSteps(current, move.raw, cubeOrientation),
+      advanceSetupGuideSteps(
+        current,
+        move.raw,
+        stage === "f2l" ? "white-top" : cubeOrientation,
+      ),
     );
-  }, [cubeOrientation, expectedPostAttemptAlg, freeInspectionRunning, isFreeMode]);
+  }, [cubeOrientation, expectedPostAttemptAlg, freeInspectionRunning, isFreeMode, stage]);
 
   const handleSmartCubeGyro = useCallback((quaternion: GyroQuaternion | null) => {
     setSmartCubeGyro(quaternion);
@@ -705,29 +711,50 @@ function App() {
       return;
     }
 
-    if (!smartCubeConnected) {
+    const fallbackNormalizeFromAlg = (sourceAlg: string) => {
       const normalizeToSolved =
-        virtualSessionStartAlg.trim().length > 0
-          ? new Alg(virtualSessionStartAlg).invert().toString()
+        sourceAlg.trim().length > 0
+          ? stripCubeRotations(new Alg(sourceAlg).invert().toString())
           : "";
-      setSessionAwareSetupAlg(
-        simplifyAlgText(joinAlgs([normalizeToSolved, targetSetupAlgCanonical])),
-      );
+      return simplifyAlgText(joinAlgs([normalizeToSolved, targetSetupAlgCanonical]));
+    };
+
+    const currentStateAlg = smartCubeConnected
+      ? liveSessionStartAlgCanonical
+      : virtualSessionStartAlg;
+
+    if (stage === "f2l") {
+      let cancelled = false;
+      void buildF2LSetupFromCurrentState({
+        kpuzzle: cubeKpuzzle,
+        currentStateAlg,
+        caseSetupAlg: activeCaseWithTrainingSetup.setup,
+      })
+        .then((setupFromCurrentState) => {
+          if (cancelled) {
+            return;
+          }
+          setSessionAwareSetupAlg(setupFromCurrentState);
+        })
+        .catch(() => {
+          if (cancelled) {
+            return;
+          }
+          setSessionAwareSetupAlg(fallbackNormalizeFromAlg(currentStateAlg));
+        });
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    if (!smartCubeConnected) {
+      setSessionAwareSetupAlg(fallbackNormalizeFromAlg(currentStateAlg));
       return;
     }
     let cancelled = false;
 
     const applyFallback = () => {
-      const normalizeToSolved =
-        liveSessionStartAlgCanonical.trim().length > 0
-          ? new Alg(liveSessionStartAlgCanonical).invert().toString()
-          : "";
-      const canonical = simplifyAlgText(
-        joinAlgs([normalizeToSolved, targetSetupAlgCanonical]),
-      );
-      setSessionAwareSetupAlg(
-        canonical,
-      );
+      setSessionAwareSetupAlg(fallbackNormalizeFromAlg(liveSessionStartAlgCanonical));
     };
 
     if (!cubeKpuzzle) {
@@ -736,6 +763,7 @@ function App() {
     }
 
     const sessionStartPattern = cubeKpuzzle.defaultPattern().applyAlg(liveSessionStartAlgCanonical);
+
     // Always normalize from the actual current cube state, then apply the
     // target setup. Stage shortcuts can drift from the intended exact case.
     void experimentalSolve3x3x3IgnoringCenters(sessionStartPattern)
@@ -761,9 +789,11 @@ function App() {
       cancelled = true;
     };
   }, [
+    activeCaseWithTrainingSetup.setup,
     cubeKpuzzle,
     isFreeMode,
     liveSessionStartAlgCanonical,
+    stage,
     targetSetupAlgCanonical,
     cubeOrientation,
     smartCubeConnected,
@@ -833,7 +863,6 @@ function App() {
     stage,
     requiredSolvedSlots,
     f2lRequiredSolvedSlots,
-    f2lCaseUnsolvedSlots,
     activeCaseId: activeCaseWithTrainingSetup.id,
     activeCaseStage: activeCaseWithTrainingSetup.stage,
     freeStepMarks,
@@ -966,6 +995,25 @@ function App() {
       autoAdvanceTimeoutRef.current = null;
     }
   }, [attemptFinished, isFreeMode, view]);
+
+  useEffect(() => {
+    if (autoAdvanceTimeoutRef.current !== null) {
+      window.clearTimeout(autoAdvanceTimeoutRef.current);
+      autoAdvanceTimeoutRef.current = null;
+    }
+    if (isFreeMode || stage !== "f2l" || !smartCubeConnected || !attemptFinished) {
+      return;
+    }
+    autoAdvanceTimeoutRef.current = window.setTimeout(() => {
+      resetTrainingSessionFromCurrentStateRef.current?.();
+    }, 250);
+    return () => {
+      if (autoAdvanceTimeoutRef.current !== null) {
+        window.clearTimeout(autoAdvanceTimeoutRef.current);
+        autoAdvanceTimeoutRef.current = null;
+      }
+    };
+  }, [attemptFinished, isFreeMode, smartCubeConnected, stage]);
 
   return (
     <main className={view === "training" ? "app-shell-training" : "app-shell"}>

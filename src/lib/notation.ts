@@ -68,9 +68,25 @@ export function simplifyAlgText(alg: string): string {
     return "";
   }
   try {
-    return new Alg(normalized)
+    const simplified = new Alg(normalized)
       .experimentalSimplify({ cancel: true })
       .toString()
+      .trim();
+    return toPlainAlgText(simplified);
+  } catch {
+    return normalized;
+  }
+}
+
+export function toPlainAlgText(alg: string): string {
+  const normalized = splitAlgTokens(alg).join(" ");
+  if (!normalized) {
+    return "";
+  }
+  try {
+    return [...new Alg(normalized).experimentalLeafMoves()]
+      .map((move) => move.toString())
+      .join(" ")
       .trim();
   } catch {
     return normalized;

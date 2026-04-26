@@ -2,11 +2,9 @@ import { useEffect } from "react";
 import type { KPattern } from "cubing/kpuzzle";
 import {
   areSlotsSolved,
-  countSolvedF2LPairs,
   isCrossSolved,
   isCrossSolvedOnSide,
   isOllSolved,
-  isSlotSolved,
   type OrbitSlot,
 } from "../lib/cubeState";
 import { FREE_INSPECTION_MS } from "../lib/appConstants";
@@ -35,7 +33,6 @@ type UseAttemptLifecycleParams = {
   stage: string;
   requiredSolvedSlots: OrbitSlot[];
   f2lRequiredSolvedSlots: OrbitSlot[];
-  f2lCaseUnsolvedSlots: OrbitSlot[];
   activeCaseId: string;
   activeCaseStage: string;
   freeStepMarks: {
@@ -97,7 +94,6 @@ export function useAttemptLifecycle(params: UseAttemptLifecycleParams) {
     stage,
     requiredSolvedSlots,
     f2lRequiredSolvedSlots,
-    f2lCaseUnsolvedSlots,
     activeCaseId,
     activeCaseStage,
     freeStepMarks,
@@ -314,13 +310,16 @@ export function useAttemptLifecycle(params: UseAttemptLifecycleParams) {
       isCrossSolved(currentLivePattern as unknown as PatternDataLike, solvedTargetPattern as unknown as PatternDataLike) ||
       isCrossSolvedOnSide(currentLivePattern as unknown as PatternDataLike, solvedTargetPattern as unknown as PatternDataLike, "U")
     );
-    const f2lGoalMatch = !isFreeMode && stage === "f2l" && solvedPattern && (
-      ((attemptStartPattern || setupTargetPattern) && countSolvedF2LPairs(currentLivePattern as unknown as PatternDataLike, solvedPattern as unknown as PatternDataLike) > countSolvedF2LPairs((attemptStartPattern ?? setupTargetPattern) as unknown as PatternDataLike, solvedPattern as unknown as PatternDataLike)) ||
-      (f2lRequiredSolvedSlots.length > 0 && areSlotsSolved(currentLivePattern as unknown as PatternDataLike, solvedPattern as unknown as PatternDataLike, f2lRequiredSolvedSlots)) ||
-      (f2lCaseUnsolvedSlots.length > 0 &&
-        f2lCaseUnsolvedSlots.some((slot) => slot.orbit === "EDGES" && isSlotSolved(currentLivePattern as unknown as PatternDataLike, solvedPattern as unknown as PatternDataLike, slot.orbit, slot.index)) &&
-        f2lCaseUnsolvedSlots.some((slot) => slot.orbit === "CORNERS" && isSlotSolved(currentLivePattern as unknown as PatternDataLike, solvedPattern as unknown as PatternDataLike, slot.orbit, slot.index)))
-    );
+    const f2lGoalMatch =
+      !isFreeMode &&
+      stage === "f2l" &&
+      solvedPattern &&
+      f2lRequiredSolvedSlots.length > 0 &&
+      areSlotsSolved(
+        currentLivePattern as unknown as PatternDataLike,
+        solvedPattern as unknown as PatternDataLike,
+        f2lRequiredSolvedSlots,
+      );
     const ollGoalMatch = !isFreeMode && stage === "oll" && solvedPattern && isOllSolved(currentLivePattern as unknown as PatternDataLike, solvedPattern as unknown as PatternDataLike);
     const pllGoalMatch = !isFreeMode && stage === "pll" && solvedPattern && currentLivePattern.isIdentical(solvedPattern);
     const stageGoalMatch = !isFreeMode && stage !== "cross" && stage !== "f2l" && requiredSolvedSlots.length > 0 && solvedPattern && areSlotsSolved(currentLivePattern as unknown as PatternDataLike, solvedPattern as unknown as PatternDataLike, requiredSolvedSlots);
@@ -383,9 +382,6 @@ export function useAttemptLifecycle(params: UseAttemptLifecycleParams) {
     timerStartAt,
     requiredSolvedSlots,
     f2lRequiredSolvedSlots,
-    f2lCaseUnsolvedSlots,
-    attemptStartPattern,
-    setupTargetPattern,
     solvedPattern,
     activeCaseId,
     activeCaseStage,

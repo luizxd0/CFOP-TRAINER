@@ -1,8 +1,8 @@
 import { useMemo } from "react";
 import type { KPattern } from "cubing/kpuzzle";
-import { F2L_CORNER_SLOTS, F2L_EDGE_SLOTS, collectNewlySolvedSlots, collectUnsolvedSlots, type OrbitSlot } from "../lib/cubeState";
+import { F2L_CORNER_SLOTS, F2L_EDGE_SLOTS, collectNewlySolvedSlots, type OrbitSlot } from "../lib/cubeState";
 import { guideStepView, type GuideStepInternal } from "../lib/guide";
-import { remapAlgForOrientation, remapMoveForOrientation, simplifyAlgText, stripCubeRotations, type CubeOrientation } from "../lib/notation";
+import { remapAlgForOrientation, remapMoveForOrientation, simplifyAlgText, stripCubeRotations, toPlainAlgText, type CubeOrientation } from "../lib/notation";
 import { joinAlgs } from "../lib/trainer";
 import type { CubeKpuzzle } from "../lib/cubePattern";
 
@@ -27,7 +27,6 @@ type UseTrainingDerivedStateParams = {
   liveSessionMoveCount: number;
   setupGuideSteps: GuideStepInternal[];
   cubeKpuzzle: CubeKpuzzle | null;
-  attemptStartPattern: KPattern | null;
 };
 
 export function useTrainingDerivedState(params: UseTrainingDerivedStateParams) {
@@ -45,10 +44,21 @@ export function useTrainingDerivedState(params: UseTrainingDerivedStateParams) {
     liveSessionMoveCount,
     setupGuideSteps,
     cubeKpuzzle,
-    attemptStartPattern,
   } = params;
 
-  const solution = activeCaseWithTrainingSetup.solutions[0].alg;
+  // F2L case algs and kpuzzle/smart-cube state share standard WCA face labels (U = model up).
+  // Yellow-top view is handled by CubeViewer's z2 frame + F2L stickering only; remapping U↔D
+  // here would double-transform and mismatch the guide vs the physical cube.
+  const orientationForAlgRemap: CubeOrientation =
+    isFreeMode || activeCaseWithTrainingSetup.stage !== "f2l" ? cubeOrientation : "white-top";
+
+  const solution = useMemo(
+    () =>
+      activeCaseWithTrainingSetup.stage === "f2l"
+        ? toPlainAlgText(activeCaseWithTrainingSetup.solutions[0].alg)
+        : activeCaseWithTrainingSetup.solutions[0].alg,
+    [activeCaseWithTrainingSetup.solutions, activeCaseWithTrainingSetup.stage],
+  );
 
   const solutionForPattern = useMemo(
     () => stripCubeRotations(solution),
@@ -63,13 +73,13 @@ export function useTrainingDerivedState(params: UseTrainingDerivedStateParams) {
   );
 
   const setupAlgForOrientation = useMemo(
-    () => remapAlgForOrientation(activeCaseWithTrainingSetup.setup, cubeOrientation),
-    [activeCaseWithTrainingSetup.setup, cubeOrientation],
+    () => remapAlgForOrientation(activeCaseWithTrainingSetup.setup, orientationForAlgRemap),
+    [activeCaseWithTrainingSetup.setup, orientationForAlgRemap],
   );
 
   const solutionAlgForOrientation = useMemo(
-    () => remapAlgForOrientation(solution, cubeOrientation),
-    [solution, cubeOrientation],
+    () => remapAlgForOrientation(solution, orientationForAlgRemap),
+    [solution, orientationForAlgRemap],
   );
 
   const smartCubeAlgCanonical = useMemo(
@@ -78,8 +88,8 @@ export function useTrainingDerivedState(params: UseTrainingDerivedStateParams) {
   );
 
   const smartCubeAlgForOrientation = useMemo(
-    () => smartCubeMoves.map((move) => remapMoveForOrientation(move, cubeOrientation)).join(" "),
-    [cubeOrientation, smartCubeMoves],
+    () => smartCubeMoves.map((move) => remapMoveForOrientation(move, orientationForAlgRemap)).join(" "),
+    [orientationForAlgRemap, smartCubeMoves],
   );
 
   const liveSessionStartAlgCanonical = useMemo(
@@ -95,10 +105,10 @@ export function useTrainingDerivedState(params: UseTrainingDerivedStateParams) {
   const setupGuideAlg = useMemo(
     () => {
       const canonical = sessionAwareSetupAlg ?? targetSetupAlgCanonical;
-      const raw = remapAlgForOrientation(canonical, cubeOrientation);
+      const raw = remapAlgForOrientation(canonical, orientationForAlgRemap);
       return simplifyAlgText(smartCubeConnected ? stripCubeRotations(raw) : raw);
     },
-    [cubeOrientation, sessionAwareSetupAlg, smartCubeConnected, targetSetupAlgCanonical],
+    [orientationForAlgRemap, sessionAwareSetupAlg, smartCubeConnected, targetSetupAlgCanonical],
   );
 
   const demoPlayerAvailable = smartCubeConnected && !isFreeMode && setupGuideComplete;
@@ -187,27 +197,6 @@ export function useTrainingDerivedState(params: UseTrainingDerivedStateParams) {
     [requiredSolvedSlots],
   );
 
-  const f2lCaseUnsolvedSlots = useMemo(() => {
-    const baselinePattern = attemptStartPattern ?? setupTargetPattern;
-    if (!baselinePattern || !solvedPattern) {
-      return [] as OrbitSlot[];
-    }
-    return [
-      ...collectUnsolvedSlots(
-        baselinePattern as unknown as { patternData: Record<string, any> },
-        solvedPattern as unknown as { patternData: Record<string, any> },
-        "EDGES",
-        F2L_EDGE_SLOTS,
-      ),
-      ...collectUnsolvedSlots(
-        baselinePattern as unknown as { patternData: Record<string, any> },
-        solvedPattern as unknown as { patternData: Record<string, any> },
-        "CORNERS",
-        F2L_CORNER_SLOTS,
-      ),
-    ];
-  }, [attemptStartPattern, setupTargetPattern, solvedPattern]);
-
   return {
     solution,
     solutionForPattern,
@@ -236,6 +225,5 @@ export function useTrainingDerivedState(params: UseTrainingDerivedStateParams) {
     solvedTargetPattern,
     requiredSolvedSlots,
     f2lRequiredSolvedSlots,
-    f2lCaseUnsolvedSlots,
   };
 }

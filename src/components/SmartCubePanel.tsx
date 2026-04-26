@@ -34,6 +34,7 @@ export function SmartCubePanel({
   onResetLiveState,
   liveStateReady,
   cubeOrientation,
+  moveRemapOrientation,
   recentSolves,
 }: {
   onMove?: (move: { raw: string; display: string }) => void;
@@ -43,6 +44,8 @@ export function SmartCubePanel({
   onResetLiveState?: () => void;
   liveStateReady: boolean;
   cubeOrientation: CubeOrientation;
+  /** Face-letter remap for live move display; defaults to cubeOrientation. */
+  moveRemapOrientation?: CubeOrientation;
   recentSolves: SolveRecord[];
 }) {
   const [support, setSupport] = useState("Checking browser support...");
@@ -258,7 +261,10 @@ export function SmartCubePanel({
               break;
             }
             smartCubeDebug("move event", { move, timestamp: event.timestamp });
-            const orientedMove = remapMoveForOrientation(move, cubeOrientation);
+            const orientedMove = remapMoveForOrientation(
+              move,
+              moveRemapOrientation ?? cubeOrientation,
+            );
             emitMove({
               raw: move,
               display: remapMoveForPerspective(orientedMove, gyroRelativeForMovesRef.current),

@@ -397,7 +397,9 @@ export function TrainingPage({
           gyroSession={smartCubeGyroSession}
           orientationNotice={
             !isFreeMode
-              ? `Trainer setup notation follows selected orientation (${cubeOrientation === "yellow-top" ? "Yellow top" : "White top"}).`
+              ? stage === "f2l"
+                ? "F2L uses standard puzzle move letters (U = model up); yellow-on-top view is the 3D frame only."
+                : `Trainer setup notation follows selected orientation (${cubeOrientation === "yellow-top" ? "Yellow top" : "White top"}).`
               : null
           }
         />
@@ -411,6 +413,7 @@ export function TrainingPage({
         onResetLiveState={handleSmartCubeResetLiveState}
         liveStateReady={smartCubeStateBootstrapped}
         cubeOrientation={cubeOrientation}
+        moveRemapOrientation={stage === "f2l" ? "white-top" : cubeOrientation}
         recentSolves={smartPanelSolves}
       />
     </section>
