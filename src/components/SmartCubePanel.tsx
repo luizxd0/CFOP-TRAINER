@@ -585,7 +585,7 @@ export function SmartCubePanel({
           <>
             {rankedBestSolves.map((solve, index) => (
               <p key={`${solve.finishedAt}-${index}`}>
-                {index + 1}. {formatMs(solve.totalMs)}
+                {index + 1}. {formatMs(solve.totalMs)} | {solve.totalMoves} moves
               </p>
             ))}
             <p>Average: {rankedAverageMs === null ? "--" : formatMs(rankedAverageMs)}</p>

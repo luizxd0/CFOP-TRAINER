@@ -143,6 +143,15 @@ function App() {
     f2lMs: null,
     ollMs: null,
   });
+  const [freeStepMoveMarks, setFreeStepMoveMarks] = useState<{
+    crossMoves: number | null;
+    f2lMoves: number | null;
+    ollMoves: number | null;
+  }>({
+    crossMoves: null,
+    f2lMoves: null,
+    ollMoves: null,
+  });
   const [freeLastSolves, setFreeLastSolves] = useState<FreeSolveRecord[]>([]);
   const [stageLastSolves, setStageLastSolves] = useState<Record<Stage, SolveRecord[]>>({
     cross: [],
@@ -154,6 +163,7 @@ function App() {
   const freeLastSplitMoveCountRef = useRef(0);
   const freeSplitSideRef = useRef<CrossSide | null>(null);
   const liveSessionCountTokensRef = useRef<string[]>([]);
+  const resetTrainingSessionFromCurrentStateRef = useRef<(() => void) | null>(null);
   const cubeKpuzzle = useCubeKpuzzle();
   const setupGuideCompleteRef = useRef(false);
   const timerRunningRef = useRef(false);
@@ -307,6 +317,7 @@ function App() {
     timerLabel,
     freeInspectionText,
     freeCurrentSplits,
+    freeCurrentSplitMoves,
     sessionBestMs,
     recentSolves,
     best5AverageMs,
@@ -314,26 +325,28 @@ function App() {
   } = useFreeSolveStats({
     freeLastSolves,
     freeStepMarks,
+    freeStepMoveMarks,
+    attemptMoveCount: liveSessionMoveCount,
     timerElapsedMs,
     isFreeMode,
     freeInspectionEnabled,
     freeInspectionRunning,
     freeInspectionRemainingMs,
   });
-  const logStageSolve = useCallback((solveStage: string, totalMs: number) => {
+  const logStageSolve = useCallback((solveStage: string, totalMs: number, totalMoves: number) => {
     if (solveStage !== "cross" && solveStage !== "f2l" && solveStage !== "oll" && solveStage !== "pll") {
       return;
     }
     setStageLastSolves((current) => ({
       ...current,
       [solveStage]: [
-        { totalMs, finishedAt: Date.now() },
+        { totalMs, totalMoves, finishedAt: Date.now() },
         ...current[solveStage],
       ].slice(0, 5),
     }));
   }, []);
   const smartPanelSolves = useMemo<SolveRecord[]>(
-    () => (isFreeMode ? freeLastSolves.map((solve) => ({ totalMs: solve.totalMs, finishedAt: solve.finishedAt })) : stageLastSolves[stage]),
+    () => (isFreeMode ? freeLastSolves.map((solve) => ({ totalMs: solve.totalMs, totalMoves: solve.totalMoves, finishedAt: solve.finishedAt })) : stageLastSolves[stage]),
     [freeLastSolves, isFreeMode, stage, stageLastSolves],
   );
   const totalCaseCount = useMemo(
@@ -342,13 +355,17 @@ function App() {
   );
 
   const handleSmartCubeMove = useCallback((move: { raw: string; display: string }) => {
+    if (attemptFinishedRef.current && !isFreeMode) {
+      setVirtualSessionStartAlg(expectedPostAttemptAlg);
+      resetTrainingSessionFromCurrentStateRef.current?.();
+    }
     setSmartCubeMoves((current) => [...current, move.raw].slice(-500));
     liveSessionCountTokensRef.current = appendLiveCountMoveTokens(liveSessionCountTokensRef.current, move.raw);
     setLiveSessionMoveCount(liveSessionCountTokensRef.current.length);
-    setSmartCubeDisplayMoves((current) =>
-      appendCompressedDisplayMove(current, move.display, 19),
-    );
     if (setupGuideCompleteRef.current) {
+      setSmartCubeDisplayMoves((current) =>
+        appendCompressedDisplayMove(current, move.display, 19),
+      );
       if (isFreeMode && freeInspectionRunning) {
         setFreeInspectionRunning(false);
         setFreeInspectionRemainingMs(0);
@@ -364,10 +381,11 @@ function App() {
       setMovesAfterSetup((current) => current + 1);
       return;
     }
+    setSmartCubeDisplayMoves((current) => (current.length > 0 ? [] : current));
     setSetupGuideSteps((current) =>
       advanceSetupGuideSteps(current, move.raw, cubeOrientation),
     );
-  }, [cubeOrientation, freeInspectionRunning, isFreeMode]);
+  }, [cubeOrientation, expectedPostAttemptAlg, freeInspectionRunning, isFreeMode]);
 
   const handleSmartCubeGyro = useCallback((quaternion: GyroQuaternion | null) => {
     setSmartCubeGyro(quaternion);
@@ -401,7 +419,9 @@ function App() {
       setFreeInspectionRunning,
       setFreeInspectionRemainingMs,
       setFreeStepMarks,
+      setFreeStepMoveMarks,
       freeSolveLoggedRef,
+      preserveDisplayMoves: true,
     });
   }, []);
 
@@ -431,9 +451,14 @@ function App() {
       setFreeInspectionRunning,
       setFreeInspectionRemainingMs,
       setFreeStepMarks,
+      setFreeStepMoveMarks,
       freeSolveLoggedRef,
+      preserveDisplayMoves: true,
     });
   }, []);
+  useEffect(() => {
+    resetTrainingSessionFromCurrentStateRef.current = resetTrainingSessionFromCurrentState;
+  }, [resetTrainingSessionFromCurrentState]);
 
   const resetAttemptSessionFromBootstrap = useCallback(() => {
     liveSessionCountTokensRef.current = [];
@@ -455,6 +480,8 @@ function App() {
       timerStartAtRef,
       setTimerElapsedMs,
       freeLastSplitMoveCountRef,
+      setFreeStepMoveMarks,
+      preserveDisplayMoves: true,
     });
   }, []);
 
@@ -650,6 +677,7 @@ function App() {
     timerRunning,
     attemptFinished,
     movesAfterSetup,
+    attemptMoveCount: liveSessionMoveCount,
     freeInspectionEnabled,
     freeInspectionRunning,
     freeInspectionRemainingMs,
@@ -667,6 +695,7 @@ function App() {
     activeCaseId: activeCaseWithTrainingSetup.id,
     activeCaseStage: activeCaseWithTrainingSetup.stage,
     freeStepMarks,
+    freeStepMoveMarks,
     freeSplitSideRef,
     freeSolveLoggedRef,
     freeLastSplitMoveCountRef,
@@ -692,6 +721,7 @@ function App() {
     onSetFreeInspectionRunning: setFreeInspectionRunning,
     onSetFreeInspectionRemainingMs: setFreeInspectionRemainingMs,
     onSetFreeStepMarks: setFreeStepMarks,
+    onSetFreeStepMoveMarks: setFreeStepMoveMarks,
     onSetFreeLastSolves: setFreeLastSolves,
     onLogStageSolve: logStageSolve,
     logPracticeTiming,
@@ -728,7 +758,7 @@ function App() {
           logPracticeTiming(activeCaseWithTrainingSetup.id, totalMs);
         }
         if (!isFreeMode) {
-          logStageSolve(activeCaseWithTrainingSetup.stage, totalMs);
+          logStageSolve(activeCaseWithTrainingSetup.stage, totalMs, liveSessionMoveCount);
         }
         setTimerRunning(false);
         timerRunningRef.current = false;
@@ -758,6 +788,7 @@ function App() {
     isFreeMode,
     logPracticeTiming,
     logStageSolve,
+    liveSessionMoveCount,
     smartCubeConnected,
     timerElapsedMs,
     timerRunning,
@@ -822,6 +853,7 @@ function App() {
           handleNewFreeScramble={handleNewFreeScramble}
           smartCubeConnected={smartCubeConnected}
           freeCurrentSplits={freeCurrentSplits}
+          freeCurrentSplitMoves={freeCurrentSplitMoves}
           freeInspectionText={freeInspectionText}
           difficulty={difficulty}
           availableDifficulties={availableDifficulties}
@@ -849,6 +881,7 @@ function App() {
           freeInspectionRunning={freeInspectionRunning}
           isDemoViewer={isDemoViewer}
           smartCubeDisplayMoves={smartCubeDisplayMoves}
+          setupGuideComplete={setupGuideComplete}
           setupGuideStepViews={setupGuideStepViews}
           demoPlayerAvailable={demoPlayerAvailable}
           demoPlayerEnabled={demoPlayerEnabled}

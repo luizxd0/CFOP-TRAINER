@@ -58,6 +58,7 @@ export function TrainingPage({
   freeInspectionRunning,
   isDemoViewer,
   smartCubeDisplayMoves,
+  setupGuideComplete,
   setupGuideStepViews,
   demoPlayerAvailable,
   demoPlayerEnabled,
@@ -72,6 +73,7 @@ export function TrainingPage({
   handleSmartCubeConnectionChange,
   handleSmartCubeResetLiveState,
   smartCubeStateBootstrapped,
+  freeCurrentSplitMoves,
   smartPanelSolves,
 }: {
   isFreeMode: boolean;
@@ -118,6 +120,7 @@ export function TrainingPage({
   freeInspectionRunning: boolean;
   isDemoViewer: boolean;
   smartCubeDisplayMoves: string[];
+  setupGuideComplete: boolean;
   setupGuideStepViews: Array<{ label: string; state: GuideStepState; progress: number }>;
   demoPlayerAvailable: boolean;
   demoPlayerEnabled: boolean;
@@ -132,6 +135,7 @@ export function TrainingPage({
   handleSmartCubeConnectionChange: (connected: boolean) => void;
   handleSmartCubeResetLiveState: () => void;
   smartCubeStateBootstrapped: boolean;
+  freeCurrentSplitMoves: { cross: number | null; f2l: number | null; oll: number | null; pll: number | null; total: number };
   smartPanelSolves: SolveRecord[];
 }) {
   return (
@@ -263,6 +267,9 @@ export function TrainingPage({
                 />
                 <p>Inspection: {freeInspectionText}</p>
                 <p>Total: {formatMs(freeCurrentSplits.total)}</p>
+                <p>
+                  Moves: C {freeCurrentSplitMoves.cross ?? "--"} | F2L {freeCurrentSplitMoves.f2l ?? "--"} | O {freeCurrentSplitMoves.oll ?? "--"} | P {freeCurrentSplitMoves.pll ?? "--"} | T {freeCurrentSplitMoves.total}
+                </p>
               </div>
             )}
           </>
@@ -378,7 +385,7 @@ export function TrainingPage({
           hideControls={smartCubeConnected ? !isDemoViewer : isFreeMode}
           liveMoves={smartCubeDisplayMoves}
           guideSteps={setupGuideStepViews}
-          showLiveMoves={smartCubeConnected}
+          showLiveMoves={smartCubeConnected && (setupGuideComplete || smartCubeDisplayMoves.length > 0)}
           demoPlayerAvailable={demoPlayerAvailable}
           demoPlayerEnabled={demoPlayerEnabled}
           onDemoPlayerEnabledChange={setDemoPlayerEnabled}

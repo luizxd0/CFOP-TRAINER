@@ -126,6 +126,20 @@ function chooseMove(
   return candidateMoveIndexes[randomInt(candidateMoveIndexes.length)];
 }
 
+function invertMove(move: string): string {
+  if (move.endsWith("2")) {
+    return move;
+  }
+  if (move.endsWith("'")) {
+    return move.slice(0, -1);
+  }
+  return `${move}'`;
+}
+
+function invertMoveSequence(moves: string[]): string[] {
+  return [...moves].reverse().map(invertMove);
+}
+
 async function initCrossTables(): Promise<CrossTables> {
   const kpuzzle = await cube3x3x3.kpuzzle();
   const moves: MoveTable[] = MOVE_NAMES.map((name) => {
@@ -219,31 +233,6 @@ function buildExactDistanceSetup(
   return { setupMoves, finalKey: currentKey };
 }
 
-function solveCrossFromKey(tables: CrossTables, key: number): string[] {
-  const solution: string[] = [];
-  let currentKey = key;
-  let remaining = tables.dist[currentKey];
-
-  while (remaining > 0) {
-    const candidates: number[] = [];
-    for (let moveIndex = 0; moveIndex < tables.moves.length; moveIndex++) {
-      const next = applyMoveToKey(currentKey, tables.moves[moveIndex]);
-      if (tables.dist[next] === remaining - 1) {
-        candidates.push(moveIndex);
-      }
-    }
-    if (candidates.length === 0) {
-      break;
-    }
-    const chosen = candidates[randomInt(candidates.length)];
-    currentKey = applyMoveToKey(currentKey, tables.moves[chosen]);
-    solution.push(tables.moves[chosen].name);
-    remaining = tables.dist[currentKey];
-  }
-
-  return solution;
-}
-
 export async function generateExactCrossCase(
   targetDistance: number,
 ): Promise<GeneratedCrossCase> {
@@ -271,7 +260,7 @@ export async function generateExactCrossCase(
     throw new Error("Failed to generate an exact-distance cross case.");
   }
 
-  const solutionMoves = solveCrossFromKey(tables, finalKey);
+  const solutionMoves = invertMoveSequence(setupMoves);
   return {
     setup: setupMoves.join(" "),
     solution: solutionMoves.join(" "),

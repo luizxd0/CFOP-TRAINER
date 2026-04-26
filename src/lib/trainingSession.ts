@@ -24,12 +24,16 @@ type ResetAttemptSessionOptions = {
   setFreeInspectionRunning?: SetState<boolean>;
   setFreeInspectionRemainingMs?: SetState<number | null>;
   setFreeStepMarks?: SetState<{ crossMs: number | null; f2lMs: number | null; ollMs: number | null }>;
+  setFreeStepMoveMarks?: SetState<{ crossMoves: number | null; f2lMoves: number | null; ollMoves: number | null }>;
   freeSolveLoggedRef?: MutableRefObject<boolean>;
+  preserveDisplayMoves?: boolean;
 };
 
 export function resetAttemptSessionState(options: ResetAttemptSessionOptions) {
   options.setLiveSessionMoveCount(0);
-  options.setSmartCubeDisplayMoves([]);
+  if (!options.preserveDisplayMoves) {
+    options.setSmartCubeDisplayMoves([]);
+  }
   options.setSessionAwareSetupAlg(null);
   options.setTrainingSessionId((current) => current + 1);
   options.setSetupGuideComplete(false);
@@ -54,6 +58,9 @@ export function resetAttemptSessionState(options: ResetAttemptSessionOptions) {
   }
   if (options.setFreeStepMarks) {
     options.setFreeStepMarks({ crossMs: null, f2lMs: null, ollMs: null });
+  }
+  if (options.setFreeStepMoveMarks) {
+    options.setFreeStepMoveMarks({ crossMoves: null, f2lMoves: null, ollMoves: null });
   }
   if (options.freeSolveLoggedRef) {
     options.freeSolveLoggedRef.current = false;

@@ -21,6 +21,7 @@ type UseAttemptLifecycleParams = {
   timerRunning: boolean;
   attemptFinished: boolean;
   movesAfterSetup: number;
+  attemptMoveCount: number;
   freeInspectionEnabled: boolean;
   freeInspectionRunning: boolean;
   freeInspectionRemainingMs: number | null;
@@ -42,6 +43,11 @@ type UseAttemptLifecycleParams = {
     f2lMs: number | null;
     ollMs: number | null;
   };
+  freeStepMoveMarks: {
+    crossMoves: number | null;
+    f2lMoves: number | null;
+    ollMoves: number | null;
+  };
   freeSplitSideRef: React.MutableRefObject<"U" | "D" | null>;
   freeSolveLoggedRef: React.MutableRefObject<boolean>;
   freeLastSplitMoveCountRef: React.MutableRefObject<number>;
@@ -62,8 +68,9 @@ type UseAttemptLifecycleParams = {
   onSetFreeInspectionRunning: (value: boolean) => void;
   onSetFreeInspectionRemainingMs: React.Dispatch<React.SetStateAction<number | null>>;
   onSetFreeStepMarks: (value: { crossMs: number | null; f2lMs: number | null; ollMs: number | null } | ((prev: { crossMs: number | null; f2lMs: number | null; ollMs: number | null }) => { crossMs: number | null; f2lMs: number | null; ollMs: number | null })) => void;
-  onSetFreeLastSolves: (updater: (current: Array<{ totalMs: number; crossMs: number; f2lMs: number; ollMs: number; pllMs: number; finishedAt: number }>) => Array<{ totalMs: number; crossMs: number; f2lMs: number; ollMs: number; pllMs: number; finishedAt: number }>) => void;
-  onLogStageSolve: (stage: string, totalMs: number) => void;
+  onSetFreeStepMoveMarks: (value: { crossMoves: number | null; f2lMoves: number | null; ollMoves: number | null } | ((prev: { crossMoves: number | null; f2lMoves: number | null; ollMoves: number | null }) => { crossMoves: number | null; f2lMoves: number | null; ollMoves: number | null })) => void;
+  onSetFreeLastSolves: (updater: (current: Array<{ totalMs: number; totalMoves: number; crossMs: number; crossMoves: number; f2lMs: number; f2lMoves: number; ollMs: number; ollMoves: number; pllMs: number; pllMoves: number; finishedAt: number }>) => Array<{ totalMs: number; totalMoves: number; crossMs: number; crossMoves: number; f2lMs: number; f2lMoves: number; ollMs: number; ollMoves: number; pllMs: number; pllMoves: number; finishedAt: number }>) => void;
+  onLogStageSolve: (stage: string, totalMs: number, totalMoves: number) => void;
   logPracticeTiming: (caseId: string, totalMs: number) => void;
   demoPlayerAvailable: boolean;
 };
@@ -76,6 +83,7 @@ export function useAttemptLifecycle(params: UseAttemptLifecycleParams) {
     timerRunning,
     attemptFinished,
     movesAfterSetup,
+    attemptMoveCount,
     freeInspectionEnabled,
     freeInspectionRunning,
     freeInspectionRemainingMs,
@@ -93,6 +101,7 @@ export function useAttemptLifecycle(params: UseAttemptLifecycleParams) {
     activeCaseId,
     activeCaseStage,
     freeStepMarks,
+    freeStepMoveMarks,
     freeSplitSideRef,
     freeSolveLoggedRef,
     freeLastSplitMoveCountRef,
@@ -113,6 +122,7 @@ export function useAttemptLifecycle(params: UseAttemptLifecycleParams) {
     onSetFreeInspectionRunning,
     onSetFreeInspectionRemainingMs,
     onSetFreeStepMarks,
+    onSetFreeStepMoveMarks,
     onSetFreeLastSolves,
     onLogStageSolve,
     logPracticeTiming,
@@ -155,6 +165,7 @@ export function useAttemptLifecycle(params: UseAttemptLifecycleParams) {
       onSetMovesAfterSetup(0);
       onSetAttemptFinished(false);
       onSetFreeStepMarks({ crossMs: null, f2lMs: null, ollMs: null });
+      onSetFreeStepMoveMarks({ crossMoves: null, f2lMoves: null, ollMoves: null });
       freeSolveLoggedRef.current = false;
       if (isFreeMode) {
         if (freeInspectionEnabled) {
@@ -178,6 +189,7 @@ export function useAttemptLifecycle(params: UseAttemptLifecycleParams) {
     onSetFreeInspectionRemainingMs,
     onSetFreeInspectionRunning,
     onSetFreeStepMarks,
+    onSetFreeStepMoveMarks,
     onSetLiveSessionMoveCount,
     onSetMovesAfterSetup,
     prevSetupGuideCompleteRef,
@@ -233,10 +245,18 @@ export function useAttemptLifecycle(params: UseAttemptLifecycleParams) {
   }, [attemptFinished, prevAttemptFinishedRef]);
 
   useEffect(() => {
-    if (freeStepMarks.crossMs === null && freeStepMarks.f2lMs === null && freeStepMarks.ollMs === null && movesAfterSetup === 0) {
+    if (
+      freeStepMarks.crossMs === null &&
+      freeStepMarks.f2lMs === null &&
+      freeStepMarks.ollMs === null &&
+      freeStepMoveMarks.crossMoves === null &&
+      freeStepMoveMarks.f2lMoves === null &&
+      freeStepMoveMarks.ollMoves === null &&
+      movesAfterSetup === 0
+    ) {
       freeSplitSideRef.current = null;
     }
-  }, [freeStepMarks.crossMs, freeStepMarks.f2lMs, freeStepMarks.ollMs, movesAfterSetup, freeSplitSideRef]);
+  }, [freeStepMarks.crossMs, freeStepMarks.f2lMs, freeStepMarks.ollMs, freeStepMoveMarks.crossMoves, freeStepMoveMarks.f2lMoves, freeStepMoveMarks.ollMoves, movesAfterSetup, freeSplitSideRef]);
 
   useEffect(() => {
     if (!timerRunning || timerStartAt === null) return;
@@ -267,7 +287,18 @@ export function useAttemptLifecycle(params: UseAttemptLifecycleParams) {
       }
       return changed ? next : current;
     });
-  }, [currentLivePattern, isFreeMode, movesAfterSetup, onSetFreeStepMarks, solvedPattern, timerRunning, timerStartAt, freeLastSplitMoveCountRef, freeSplitSideRef]);
+    onSetFreeStepMoveMarks((current) => {
+      const next = { ...current };
+      let changed = false;
+      const patternLike = currentLivePattern as unknown as PatternDataLike;
+      const solvedLike = solvedPattern as unknown as PatternDataLike;
+      const progress = detectFreeSplitProgress(patternLike, solvedLike, freeSplitSideRef.current, "U");
+      if (next.crossMoves === null && progress.cross) { next.crossMoves = attemptMoveCount; changed = true; }
+      if (next.f2lMoves === null && progress.f2l) { next.f2lMoves = attemptMoveCount; changed = true; }
+      if (next.ollMoves === null && progress.oll) { next.ollMoves = attemptMoveCount; changed = true; }
+      return changed ? next : current;
+    });
+  }, [attemptMoveCount, currentLivePattern, isFreeMode, movesAfterSetup, onSetFreeStepMarks, onSetFreeStepMoveMarks, solvedPattern, timerRunning, timerStartAt, freeLastSplitMoveCountRef, freeSplitSideRef]);
 
   useEffect(() => {
     if (!timerRunning || !currentLivePattern || !smartCubeConnected) return;
@@ -298,14 +329,29 @@ export function useAttemptLifecycle(params: UseAttemptLifecycleParams) {
         logPracticeTiming(activeCaseId, totalMs);
       }
       if (!isFreeMode) {
-        onLogStageSolve(stage, totalMs);
+        onLogStageSolve(stage, totalMs, attemptMoveCount);
       }
       if (isFreeMode && !freeSolveLoggedRef.current) {
         const crossAt = freeStepMarks.crossMs ?? totalMs;
         const f2lAt = freeStepMarks.f2lMs ?? totalMs;
         const ollAt = freeStepMarks.ollMs ?? totalMs;
+        const crossMovesAt = freeStepMoveMarks.crossMoves ?? attemptMoveCount;
+        const f2lMovesAt = freeStepMoveMarks.f2lMoves ?? attemptMoveCount;
+        const ollMovesAt = freeStepMoveMarks.ollMoves ?? attemptMoveCount;
         onSetFreeLastSolves((current) => [
-          { totalMs, crossMs: crossAt, f2lMs: Math.max(0, f2lAt - crossAt), ollMs: Math.max(0, ollAt - f2lAt), pllMs: Math.max(0, totalMs - ollAt), finishedAt: Date.now() },
+          {
+            totalMs,
+            totalMoves: attemptMoveCount,
+            crossMs: crossAt,
+            crossMoves: crossMovesAt,
+            f2lMs: Math.max(0, f2lAt - crossAt),
+            f2lMoves: Math.max(0, f2lMovesAt - crossMovesAt),
+            ollMs: Math.max(0, ollAt - f2lAt),
+            ollMoves: Math.max(0, ollMovesAt - f2lMovesAt),
+            pllMs: Math.max(0, totalMs - ollAt),
+            pllMoves: Math.max(0, attemptMoveCount - ollMovesAt),
+            finishedAt: Date.now(),
+          },
           ...current,
         ].slice(0, 5));
         freeSolveLoggedRef.current = true;
@@ -320,6 +366,9 @@ export function useAttemptLifecycle(params: UseAttemptLifecycleParams) {
     freeStepMarks.crossMs,
     freeStepMarks.f2lMs,
     freeStepMarks.ollMs,
+    freeStepMoveMarks.crossMoves,
+    freeStepMoveMarks.f2lMoves,
+    freeStepMoveMarks.ollMoves,
     isFreeMode,
     smartCubeConnected,
     timerRunning,
@@ -327,6 +376,8 @@ export function useAttemptLifecycle(params: UseAttemptLifecycleParams) {
     solvedTargetPattern,
     stage,
     timerElapsedMs,
+    movesAfterSetup,
+    attemptMoveCount,
     timerStartAt,
     requiredSolvedSlots,
     f2lRequiredSolvedSlots,

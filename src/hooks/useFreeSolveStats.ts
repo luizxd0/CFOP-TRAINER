@@ -8,9 +8,17 @@ type FreeStepMarks = {
   ollMs: number | null;
 };
 
+type FreeStepMoveMarks = {
+  crossMoves: number | null;
+  f2lMoves: number | null;
+  ollMoves: number | null;
+};
+
 type UseFreeSolveStatsParams = {
   freeLastSolves: FreeSolveRecord[];
   freeStepMarks: FreeStepMarks;
+  freeStepMoveMarks: FreeStepMoveMarks;
+  attemptMoveCount: number;
   timerElapsedMs: number;
   isFreeMode: boolean;
   freeInspectionEnabled: boolean;
@@ -22,6 +30,8 @@ export function useFreeSolveStats(params: UseFreeSolveStatsParams) {
   const {
     freeLastSolves,
     freeStepMarks,
+    freeStepMoveMarks,
+    attemptMoveCount,
     timerElapsedMs,
     isFreeMode,
     freeInspectionEnabled,
@@ -60,6 +70,22 @@ export function useFreeSolveStats(params: UseFreeSolveStatsParams) {
         : null;
     return { cross, f2l, oll, pll, total: timerElapsedMs };
   }, [freeStepMarks.crossMs, freeStepMarks.f2lMs, freeStepMarks.ollMs, timerElapsedMs]);
+  const freeCurrentSplitMoves = useMemo(() => {
+    const cross = freeStepMoveMarks.crossMoves;
+    const f2l =
+      freeStepMoveMarks.crossMoves !== null && freeStepMoveMarks.f2lMoves !== null
+        ? Math.max(0, freeStepMoveMarks.f2lMoves - freeStepMoveMarks.crossMoves)
+        : null;
+    const oll =
+      freeStepMoveMarks.f2lMoves !== null && freeStepMoveMarks.ollMoves !== null
+        ? Math.max(0, freeStepMoveMarks.ollMoves - freeStepMoveMarks.f2lMoves)
+        : null;
+    const pll =
+      freeStepMoveMarks.ollMoves !== null
+        ? Math.max(0, attemptMoveCount - freeStepMoveMarks.ollMoves)
+        : null;
+    return { cross, f2l, oll, pll, total: attemptMoveCount };
+  }, [freeStepMoveMarks.crossMoves, freeStepMoveMarks.f2lMoves, freeStepMoveMarks.ollMoves, attemptMoveCount]);
 
   const sessionBestMs = useMemo(() => {
     if (freeLastSolves.length === 0) {
@@ -114,6 +140,7 @@ export function useFreeSolveStats(params: UseFreeSolveStatsParams) {
     timerLabel,
     freeInspectionText,
     freeCurrentSplits,
+    freeCurrentSplitMoves,
     sessionBestMs,
     recentSolves,
     best5AverageMs,
