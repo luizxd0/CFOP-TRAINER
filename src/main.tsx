@@ -11,12 +11,6 @@ import {
   stages,
 } from "./lib/trainer";
 import {
-  countSolvedF2LPairs,
-  areSlotsSolved,
-  isCrossSolved,
-  isF2LSolved,
-  isOllSolved,
-  isSlotSolved,
   type CrossSide,
 } from "./lib/cubeState";
 import {
@@ -52,7 +46,6 @@ import { useCaseCollections } from "./hooks/useCaseCollections";
 import { useThemeMode } from "./hooks/useThemeMode";
 import { useServiceWorker } from "./hooks/useServiceWorker";
 import { useScreenWakeLock } from "./hooks/useScreenWakeLock";
-import { FREE_INSPECTION_MS } from "./lib/appConstants";
 import { initTwistyDebug } from "./lib/twisty";
 import { useTrainingDerivedState } from "./hooks/useTrainingDerivedState";
 import { useFreeSolveStats } from "./hooks/useFreeSolveStats";
@@ -63,8 +56,8 @@ import { useSmartCubeBootstrap } from "./hooks/useSmartCubeBootstrap";
 import { useTrainingControls } from "./hooks/useTrainingControls";
 import { useCubeKpuzzle } from "./hooks/useCubeKpuzzle";
 import { useSelectionSync } from "./hooks/useSelectionSync";
-import { appendCompressedDisplayMove } from "./lib/moveDisplay";
-import { detectFreeSplitProgress } from "./lib/freeSplits";
+import { appendCompressedDisplayMove, appendLiveCountMoveTokens } from "./lib/moveDisplay";
+import { useAttemptLifecycle } from "./hooks/useAttemptLifecycle";
 import type {
   AppMode,
   AppView,
@@ -153,6 +146,7 @@ function App() {
   const freeSolveLoggedRef = useRef(false);
   const freeLastSplitMoveCountRef = useRef(0);
   const freeSplitSideRef = useRef<CrossSide | null>(null);
+  const liveSessionCountTokensRef = useRef<string[]>([]);
   const cubeKpuzzle = useCubeKpuzzle();
   const setupGuideCompleteRef = useRef(false);
   const timerRunningRef = useRef(false);
@@ -326,7 +320,8 @@ function App() {
 
   const handleSmartCubeMove = useCallback((move: { raw: string; display: string }) => {
     setSmartCubeMoves((current) => [...current, move.raw].slice(-500));
-    setLiveSessionMoveCount((current) => current + 1);
+    liveSessionCountTokensRef.current = appendLiveCountMoveTokens(liveSessionCountTokensRef.current, move.raw);
+    setLiveSessionMoveCount(liveSessionCountTokensRef.current.length);
     setSmartCubeDisplayMoves((current) =>
       appendCompressedDisplayMove(current, move.display, 19),
     );
@@ -358,6 +353,7 @@ function App() {
   const hardResetLiveCubeState = useCallback(() => {
     setSmartCubeMoves([]);
     smartCubeMovesRef.current = [];
+    liveSessionCountTokensRef.current = [];
     setLiveSessionStartMoves([]);
     setVirtualSessionStartAlg("");
     setSmartCubeStateBootstrapped(false);
@@ -389,6 +385,7 @@ function App() {
   const resetTrainingSessionFromCurrentState = useCallback(() => {
     const currentMoves = [...smartCubeMovesRef.current];
     setLiveSessionStartMoves(currentMoves);
+    liveSessionCountTokensRef.current = [];
     setSmartCubeStateBootstrapped(currentMoves.length > 0);
     resetAttemptSessionState({
       setLiveSessionMoveCount,
@@ -416,6 +413,7 @@ function App() {
   }, []);
 
   const resetAttemptSessionFromBootstrap = useCallback(() => {
+    liveSessionCountTokensRef.current = [];
     resetAttemptSessionState({
       setLiveSessionMoveCount,
       setSmartCubeDisplayMoves,
@@ -622,342 +620,59 @@ function App() {
     setupGuideCompleteRef.current = complete;
   }, [setupGuideSteps]);
 
-  useEffect(() => {
-    const wasComplete = prevSetupGuideCompleteRef.current;
-    if (!wasComplete && setupGuideComplete) {
-      // Start counting live turns for the attempt only after setup is done.
-      setLiveSessionMoveCount(0);
-      setMovesAfterSetup(0);
-      setAttemptFinished(false);
-      setFreeStepMarks({ crossMs: null, f2lMs: null, ollMs: null });
-      freeSolveLoggedRef.current = false;
-      if (isFreeMode) {
-        if (freeInspectionEnabled) {
-          setFreeInspectionRemainingMs(FREE_INSPECTION_MS);
-          setFreeInspectionRunning(true);
-        } else {
-          setFreeInspectionRemainingMs(null);
-          setFreeInspectionRunning(false);
-        }
-      }
-    }
-    if (!setupGuideComplete) {
-      setFreeInspectionRunning(false);
-      setFreeInspectionRemainingMs(null);
-    }
-    prevSetupGuideCompleteRef.current = setupGuideComplete;
-  }, [freeInspectionEnabled, isFreeMode, setupGuideComplete]);
-
-  useEffect(() => {
-    if (
-      !setupGuideComplete &&
-      currentLivePattern &&
-      setupTargetPattern &&
-      currentLivePattern.isIdentical(setupTargetPattern)
-    ) {
-      setSetupGuideComplete(true);
-      setupGuideCompleteRef.current = true;
-    }
-  }, [setupGuideComplete, currentLivePattern, setupTargetPattern]);
-
-  useEffect(() => {
-    if (!setupGuideComplete || movesAfterSetup > 0 || !currentLivePattern || attemptStartPattern) {
-      return;
-    }
-    setAttemptStartPattern(currentLivePattern);
-  }, [attemptStartPattern, currentLivePattern, movesAfterSetup, setupGuideComplete]);
-
-  useEffect(() => {
-    if (!demoPlayerAvailable) {
-      setDemoPlayerEnabled(false);
-    }
-  }, [demoPlayerAvailable]);
-
-  useEffect(() => {
-    if (
-      !smartCubeConnected ||
-      !setupGuideComplete ||
-      timerRunning ||
-      attemptFinished ||
-      movesAfterSetup === 0
-    ) {
-      return;
-    }
-    const startedAt = performance.now();
-    setTimerStartAt(startedAt);
-    setTimerRunning(true);
-  }, [smartCubeConnected, setupGuideComplete, timerRunning, attemptFinished, movesAfterSetup]);
-
-  useEffect(() => {
-    if (!isFreeMode || !freeInspectionRunning || freeInspectionRemainingMs === null) {
-      return;
-    }
-    const interval = window.setInterval(() => {
-      setFreeInspectionRemainingMs((current) => {
-        if (current === null) {
-          return null;
-        }
-        const next = current - 20;
-        if (next <= 0) {
-          setFreeInspectionRunning(false);
-          return 0;
-        }
-        return next;
-      });
-    }, 20);
-    return () => {
-      window.clearInterval(interval);
-    };
-  }, [freeInspectionRemainingMs, freeInspectionRunning, isFreeMode]);
-
-  useEffect(() => {
-    if (!isFreeMode || !setupGuideComplete || movesAfterSetup > 0 || timerRunning || attemptFinished) {
-      return;
-    }
-    if (!freeInspectionEnabled) {
-      setFreeInspectionRunning(false);
-      setFreeInspectionRemainingMs(null);
-      return;
-    }
-    if (!freeInspectionRunning) {
-      setFreeInspectionRemainingMs(FREE_INSPECTION_MS);
-      setFreeInspectionRunning(true);
-    }
-  }, [
-    attemptFinished,
-    freeInspectionEnabled,
-    freeInspectionRunning,
-    isFreeMode,
-    movesAfterSetup,
-    setupGuideComplete,
-    timerRunning,
-  ]);
-
-  useEffect(() => {
-    prevAttemptFinishedRef.current = attemptFinished;
-  }, [attemptFinished]);
-
-  useEffect(() => {
-    if (
-      freeStepMarks.crossMs === null &&
-      freeStepMarks.f2lMs === null &&
-      freeStepMarks.ollMs === null &&
-      movesAfterSetup === 0
-    ) {
-      freeSplitSideRef.current = null;
-    }
-  }, [freeStepMarks.crossMs, freeStepMarks.f2lMs, freeStepMarks.ollMs, movesAfterSetup, trainingSessionId]);
-
-  useEffect(() => {
-    if (!timerRunning || timerStartAt === null) {
-      return;
-    }
-    const interval = window.setInterval(() => {
-      setTimerElapsedMs(performance.now() - timerStartAt);
-    }, 20);
-    return () => {
-      window.clearInterval(interval);
-    };
-  }, [timerRunning, timerStartAt]);
-
-  useEffect(() => {
-    if (!isFreeMode || !timerRunning || !currentLivePattern || !solvedPattern || timerStartAt === null) {
-      return;
-    }
-    if (freeLastSplitMoveCountRef.current === movesAfterSetup) {
-      return;
-    }
-    const elapsed = performance.now() - timerStartAt;
-    setFreeStepMarks((current) => {
-      const next = { ...current };
-      let changed = false;
-      const patternLike = currentLivePattern as unknown as { patternData: Record<string, any> };
-      const solvedLike = solvedPattern as unknown as { patternData: Record<string, any> };
-      const progress = detectFreeSplitProgress(
-        patternLike,
-        solvedLike,
-        freeSplitSideRef.current,
-        "U",
-      );
-      if (freeSplitSideRef.current === null && progress.cross) {
-        freeSplitSideRef.current = progress.side;
-      }
-
-      if (next.crossMs === null && progress.cross) {
-        next.crossMs = elapsed;
-        changed = true;
-      }
-      if (next.f2lMs === null && progress.f2l) {
-        next.f2lMs = elapsed;
-        changed = true;
-      }
-      if (next.ollMs === null && progress.oll) {
-        next.ollMs = elapsed;
-        changed = true;
-      }
-      if (changed) {
-        freeLastSplitMoveCountRef.current = movesAfterSetup;
-      }
-      return changed ? next : current;
-    });
-  }, [currentLivePattern, isFreeMode, movesAfterSetup, solvedPattern, timerRunning, timerStartAt]);
-
-  useEffect(() => {
-    if (!timerRunning || !currentLivePattern) {
-      return;
-    }
-    if (!smartCubeConnected) {
-      return;
-    }
-    const exactMatch = solvedTargetPattern
-      ? currentLivePattern.isIdentical(solvedTargetPattern)
-      : false;
-    const freeModeGoalMatch =
-      isFreeMode &&
-      solvedPattern &&
-      currentLivePattern.isIdentical(solvedPattern);
-    const crossGoalMatch =
-      !isFreeMode &&
-      stage === "cross" &&
-      solvedPattern &&
-      isCrossSolved(
-        currentLivePattern as unknown as { patternData: Record<string, any> },
-        solvedPattern as unknown as { patternData: Record<string, any> },
-      );
-    const crossTargetGoalMatch =
-      !isFreeMode &&
-      stage === "cross" &&
-      solvedTargetPattern &&
-      isCrossSolved(
-        currentLivePattern as unknown as { patternData: Record<string, any> },
-        solvedTargetPattern as unknown as { patternData: Record<string, any> },
-      );
-    const f2lGoalMatch =
-      !isFreeMode &&
-      stage === "f2l" &&
-      solvedPattern &&
-      (
-        ((attemptStartPattern || setupTargetPattern) &&
-          countSolvedF2LPairs(
-            currentLivePattern as unknown as { patternData: Record<string, any> },
-            solvedPattern as unknown as { patternData: Record<string, any> },
-          ) >
-            countSolvedF2LPairs(
-              (attemptStartPattern ?? setupTargetPattern) as unknown as { patternData: Record<string, any> },
-              solvedPattern as unknown as { patternData: Record<string, any> },
-            )) ||
-        (f2lRequiredSolvedSlots.length > 0 &&
-          areSlotsSolved(
-            currentLivePattern as unknown as { patternData: Record<string, any> },
-            solvedPattern as unknown as { patternData: Record<string, any> },
-            f2lRequiredSolvedSlots,
-          )) ||
-        (f2lCaseUnsolvedSlots.length > 0 &&
-          f2lCaseUnsolvedSlots.some(
-            (slot) =>
-              slot.orbit === "EDGES" &&
-              isSlotSolved(
-                currentLivePattern as unknown as { patternData: Record<string, any> },
-                solvedPattern as unknown as { patternData: Record<string, any> },
-                slot.orbit,
-                slot.index,
-              ),
-          ) &&
-          f2lCaseUnsolvedSlots.some(
-            (slot) =>
-              slot.orbit === "CORNERS" &&
-              isSlotSolved(
-                currentLivePattern as unknown as { patternData: Record<string, any> },
-                solvedPattern as unknown as { patternData: Record<string, any> },
-                slot.orbit,
-                slot.index,
-              ),
-          ))
-      );
-    const ollGoalMatch =
-      !isFreeMode &&
-      stage === "oll" &&
-      solvedPattern &&
-      isOllSolved(
-        currentLivePattern as unknown as { patternData: Record<string, any> },
-        solvedPattern as unknown as { patternData: Record<string, any> },
-      );
-    const pllGoalMatch =
-      !isFreeMode &&
-      stage === "pll" &&
-      solvedPattern &&
-      currentLivePattern.isIdentical(solvedPattern);
-    const stageGoalMatch =
-      !isFreeMode &&
-      stage !== "cross" &&
-      stage !== "f2l" &&
-      requiredSolvedSlots.length > 0 &&
-      solvedPattern &&
-      areSlotsSolved(
-        currentLivePattern as unknown as { patternData: Record<string, any> },
-        solvedPattern as unknown as { patternData: Record<string, any> },
-        requiredSolvedSlots,
-      );
-    if (
-      freeModeGoalMatch ||
-      (!isFreeMode &&
-        (exactMatch ||
-          crossGoalMatch ||
-          crossTargetGoalMatch ||
-          f2lGoalMatch ||
-          ollGoalMatch ||
-          pllGoalMatch ||
-          stageGoalMatch))
-    ) {
-      const totalMs = timerStartAt !== null ? performance.now() - timerStartAt : timerElapsedMs;
-      if (!isFreeMode && activeCaseWithTrainingSetup.stage !== "cross") {
-        logPracticeTiming(activeCaseWithTrainingSetup.id, totalMs);
-      }
-      if (isFreeMode && !freeSolveLoggedRef.current) {
-        const crossAt = freeStepMarks.crossMs ?? totalMs;
-        const f2lAt = freeStepMarks.f2lMs ?? totalMs;
-        const ollAt = freeStepMarks.ollMs ?? totalMs;
-        setFreeLastSolves((current) => [
-          {
-            totalMs,
-            crossMs: crossAt,
-            f2lMs: Math.max(0, f2lAt - crossAt),
-            ollMs: Math.max(0, ollAt - f2lAt),
-            pllMs: Math.max(0, totalMs - ollAt),
-            finishedAt: Date.now(),
-          },
-          ...current,
-        ].slice(0, 5));
-        freeSolveLoggedRef.current = true;
-      }
-      setTimerRunning(false);
-      timerRunningRef.current = false;
-      setAttemptFinished(true);
-      attemptFinishedRef.current = true;
-      setTimerElapsedMs(totalMs);
-    }
-  }, [
-    freeStepMarks.crossMs,
-    freeStepMarks.f2lMs,
-    freeStepMarks.ollMs,
+  useAttemptLifecycle({
     isFreeMode,
     smartCubeConnected,
+    setupGuideComplete,
     timerRunning,
+    attemptFinished,
+    movesAfterSetup,
+    freeInspectionEnabled,
+    freeInspectionRunning,
+    freeInspectionRemainingMs,
+    timerStartAt,
+    timerElapsedMs,
     currentLivePattern,
+    setupTargetPattern,
+    attemptStartPattern,
+    solvedPattern,
     solvedTargetPattern,
     stage,
-    timerElapsedMs,
-    timerStartAt,
     requiredSolvedSlots,
     f2lRequiredSolvedSlots,
     f2lCaseUnsolvedSlots,
-    attemptStartPattern,
-    setupTargetPattern,
-    solvedPattern,
-    activeCaseWithTrainingSetup.id,
-    activeCaseWithTrainingSetup.stage,
+    activeCaseId: activeCaseWithTrainingSetup.id,
+    activeCaseStage: activeCaseWithTrainingSetup.stage,
+    freeStepMarks,
+    freeSplitSideRef,
+    freeSolveLoggedRef,
+    freeLastSplitMoveCountRef,
+    timerRunningRef,
+    attemptFinishedRef,
+    setupGuideCompleteRef,
+    prevSetupGuideCompleteRef,
+    prevAttemptFinishedRef,
+    onSetSetupGuideComplete: setSetupGuideComplete,
+    onSetAttemptStartPattern: setAttemptStartPattern,
+    onSetDemoPlayerEnabled: setDemoPlayerEnabled,
+    onSetLiveSessionMoveCount: (value) => {
+      if (value === 0) {
+        liveSessionCountTokensRef.current = [];
+      }
+      setLiveSessionMoveCount(value);
+    },
+    onSetMovesAfterSetup: setMovesAfterSetup,
+    onSetAttemptFinished: setAttemptFinished,
+    onSetTimerRunning: setTimerRunning,
+    onSetTimerStartAt: setTimerStartAt,
+    onSetTimerElapsedMs: setTimerElapsedMs,
+    onSetFreeInspectionRunning: setFreeInspectionRunning,
+    onSetFreeInspectionRemainingMs: setFreeInspectionRemainingMs,
+    onSetFreeStepMarks: setFreeStepMarks,
+    onSetFreeLastSolves: setFreeLastSolves,
     logPracticeTiming,
-  ]);
+    demoPlayerAvailable,
+  });
 
   useEffect(() => {
     if (view !== "training" || smartCubeConnected) {

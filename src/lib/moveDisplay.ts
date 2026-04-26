@@ -53,3 +53,37 @@ export function appendCompressedDisplayMove(
   next.push(trimmed);
   return next.slice(-maxLength);
 }
+
+export function appendLiveCountMoveTokens(
+  current: string[],
+  nextToken: string,
+): string[] {
+  const trimmed = nextToken.trim();
+  if (!trimmed) {
+    return current;
+  }
+  try {
+    const incoming = Move.fromString(trimmed);
+    const next = [...current];
+    const lastToken = next[next.length - 1];
+    if (lastToken) {
+      const last = Move.fromString(lastToken);
+      const incomingAmount = normalizeAmount(incoming.amount);
+      const lastAmount = normalizeAmount(last.amount);
+      const sameQuarterDirection =
+        incomingAmount === lastAmount &&
+        (incomingAmount === 1 || incomingAmount === 3);
+      if (
+        last.family === incoming.family &&
+        sameQuarterDirection
+      ) {
+        next[next.length - 1] = `${incoming.family}2`;
+        return next;
+      }
+    }
+    next.push(trimmed);
+    return next;
+  } catch {
+    return [...current, trimmed];
+  }
+}
