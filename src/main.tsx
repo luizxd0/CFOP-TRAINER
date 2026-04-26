@@ -58,6 +58,7 @@ import { useCubeKpuzzle } from "./hooks/useCubeKpuzzle";
 import { useSelectionSync } from "./hooks/useSelectionSync";
 import { appendCompressedDisplayMove, appendLiveCountMoveTokens } from "./lib/moveDisplay";
 import { useAttemptLifecycle } from "./hooks/useAttemptLifecycle";
+import { formatMs } from "./lib/time";
 import type {
   AppMode,
   AppView,
@@ -153,6 +154,15 @@ function App() {
     ollMoves: null,
   });
   const [freeLastSolves, setFreeLastSolves] = useState<FreeSolveRecord[]>([]);
+  const [freeLastSolveDisplaySnapshot, setFreeLastSolveDisplaySnapshot] = useState<{
+    timerElapsedMs: number;
+    totalMoves: number;
+    stepMarks: { crossMs: number | null; f2lMs: number | null; ollMs: number | null };
+    stepMoveMarks: { crossMoves: number | null; f2lMoves: number | null; ollMoves: number | null };
+  } | null>(null);
+  const [freeLastSolveDisplayPhase, setFreeLastSolveDisplayPhase] = useState<
+    "idle" | "waiting_for_setup_start" | "waiting_for_inspection_start"
+  >("idle");
   const [stageLastSolves, setStageLastSolves] = useState<Record<Stage, SolveRecord[]>>({
     cross: [],
     f2l: [],
@@ -177,6 +187,7 @@ function App() {
   const [selectedCaseId, setSelectedCaseId] = useState("cross-1");
   const [showPanelSolution, setShowPanelSolution] = useState(false);
   const [crossRefresh, setCrossRefresh] = useState(0);
+  const prevFreeAttemptFinishedRef = useRef(false);
   const shouldKeepScreenAwake = smartCubeConnected || timerRunning;
   useServiceWorker();
   useScreenWakeLock(shouldKeepScreenAwake);
@@ -333,6 +344,86 @@ function App() {
     freeInspectionRunning,
     freeInspectionRemainingMs,
   });
+
+  useEffect(() => {
+    if (!isFreeMode) {
+      prevFreeAttemptFinishedRef.current = attemptFinished;
+      return;
+    }
+    const wasFinished = prevFreeAttemptFinishedRef.current;
+    if (!wasFinished && attemptFinished) {
+      setFreeLastSolveDisplaySnapshot({
+        timerElapsedMs,
+        totalMoves: liveSessionMoveCount,
+        stepMarks: { ...freeStepMarks },
+        stepMoveMarks: { ...freeStepMoveMarks },
+      });
+      setFreeLastSolveDisplayPhase("waiting_for_setup_start");
+    }
+    prevFreeAttemptFinishedRef.current = attemptFinished;
+  }, [attemptFinished, freeStepMarks, freeStepMoveMarks, isFreeMode, liveSessionMoveCount, timerElapsedMs]);
+
+  useEffect(() => {
+    if (!isFreeMode) {
+      setFreeLastSolveDisplaySnapshot(null);
+      setFreeLastSolveDisplayPhase("idle");
+      return;
+    }
+    if (freeLastSolveDisplayPhase === "waiting_for_setup_start" && !setupGuideComplete) {
+      setFreeLastSolveDisplayPhase("waiting_for_inspection_start");
+      return;
+    }
+    if (
+      freeLastSolveDisplayPhase === "waiting_for_inspection_start" &&
+      ((freeInspectionEnabled && freeInspectionRunning) || (!freeInspectionEnabled && setupGuideComplete))
+    ) {
+      setFreeLastSolveDisplaySnapshot(null);
+      setFreeLastSolveDisplayPhase("idle");
+    }
+  }, [freeInspectionEnabled, freeInspectionRunning, freeLastSolveDisplayPhase, isFreeMode, setupGuideComplete]);
+
+  const displayedFreeCurrentSplits = useMemo(() => {
+    if (!freeLastSolveDisplaySnapshot) {
+      return freeCurrentSplits;
+    }
+    const { stepMarks, timerElapsedMs: totalMs } = freeLastSolveDisplaySnapshot;
+    return {
+      cross: stepMarks.crossMs,
+      f2l: stepMarks.crossMs !== null && stepMarks.f2lMs !== null ? Math.max(0, stepMarks.f2lMs - stepMarks.crossMs) : null,
+      oll: stepMarks.f2lMs !== null && stepMarks.ollMs !== null ? Math.max(0, stepMarks.ollMs - stepMarks.f2lMs) : null,
+      pll: stepMarks.ollMs !== null ? Math.max(0, totalMs - stepMarks.ollMs) : null,
+      total: totalMs,
+    };
+  }, [freeCurrentSplits, freeLastSolveDisplaySnapshot]);
+
+  const displayedFreeCurrentSplitMoves = useMemo(() => {
+    if (!freeLastSolveDisplaySnapshot) {
+      return freeCurrentSplitMoves;
+    }
+    const { stepMoveMarks, totalMoves } = freeLastSolveDisplaySnapshot;
+    return {
+      cross: stepMoveMarks.crossMoves,
+      f2l:
+        stepMoveMarks.crossMoves !== null && stepMoveMarks.f2lMoves !== null
+          ? Math.max(0, stepMoveMarks.f2lMoves - stepMoveMarks.crossMoves)
+          : null,
+      oll:
+        stepMoveMarks.f2lMoves !== null && stepMoveMarks.ollMoves !== null
+          ? Math.max(0, stepMoveMarks.ollMoves - stepMoveMarks.f2lMoves)
+          : null,
+      pll: stepMoveMarks.ollMoves !== null ? Math.max(0, totalMoves - stepMoveMarks.ollMoves) : null,
+      total: totalMoves,
+    };
+  }, [freeCurrentSplitMoves, freeLastSolveDisplaySnapshot]);
+
+  const shouldShowPersistedFreeTimer =
+    isFreeMode &&
+    freeLastSolveDisplaySnapshot !== null &&
+    !timerRunning &&
+    !freeInspectionRunning;
+  const displayedTimerLabel = shouldShowPersistedFreeTimer
+    ? formatMs(freeLastSolveDisplaySnapshot.timerElapsedMs)
+    : timerLabel;
   const logStageSolve = useCallback((solveStage: string, totalMs: number, totalMoves: number) => {
     if (solveStage !== "cross" && solveStage !== "f2l" && solveStage !== "oll" && solveStage !== "pll") {
       return;
@@ -355,6 +446,9 @@ function App() {
   );
 
   const handleSmartCubeMove = useCallback((move: { raw: string; display: string }) => {
+    if (isFreeMode && attemptFinishedRef.current) {
+      resetTrainingSessionFromCurrentStateRef.current?.();
+    }
     if (attemptFinishedRef.current && !isFreeMode) {
       setVirtualSessionStartAlg(expectedPostAttemptAlg);
       resetTrainingSessionFromCurrentStateRef.current?.();
@@ -430,6 +524,12 @@ function App() {
     setLiveSessionStartMoves(currentMoves);
     liveSessionCountTokensRef.current = [];
     setSmartCubeStateBootstrapped(currentMoves.length > 0);
+    const nextSteps = buildGuideStepsFromAlg(setupGuideAlg);
+    setSetupGuideSteps(nextSteps);
+    const complete = nextSteps.length === 0;
+    setSetupGuideComplete(complete);
+    setupGuideCompleteRef.current = complete;
+    prevSetupGuideCompleteRef.current = complete;
     resetAttemptSessionState({
       setLiveSessionMoveCount,
       setSmartCubeDisplayMoves,
@@ -455,7 +555,7 @@ function App() {
       freeSolveLoggedRef,
       preserveDisplayMoves: true,
     });
-  }, []);
+  }, [setupGuideAlg]);
   useEffect(() => {
     resetTrainingSessionFromCurrentStateRef.current = resetTrainingSessionFromCurrentState;
   }, [resetTrainingSessionFromCurrentState]);
@@ -646,21 +746,26 @@ function App() {
     const nextSteps = buildGuideStepsFromAlg(setupGuideAlg);
     setSetupGuideSteps(nextSteps);
     const complete = nextSteps.length === 0;
+    const preserveLastFreeSolveDisplay = isFreeMode && attemptFinishedRef.current;
     setSetupGuideComplete(complete);
     setupGuideCompleteRef.current = complete;
     prevSetupGuideCompleteRef.current = complete;
     setAttemptStartPattern(null);
     setMovesAfterSetup(0);
-    setAttemptFinished(false);
-    attemptFinishedRef.current = false;
+    if (!preserveLastFreeSolveDisplay) {
+      setAttemptFinished(false);
+      attemptFinishedRef.current = false;
+    }
     setTimerRunning(false);
     timerRunningRef.current = false;
     setTimerStartAt(null);
     timerStartAtRef.current = null;
-    setTimerElapsedMs(0);
+    if (!preserveLastFreeSolveDisplay) {
+      setTimerElapsedMs(0);
+    }
     setDemoPlayerEnabled(false);
     freeLastSplitMoveCountRef.current = 0;
-  }, [setupGuideAlg, smartCubeGyroSession, trainingSessionId]);
+  }, [isFreeMode, setupGuideAlg, smartCubeGyroSession, trainingSessionId]);
 
   useEffect(() => {
     const complete =
@@ -852,8 +957,8 @@ function App() {
           setFreeInspectionEnabled={setFreeInspectionEnabled}
           handleNewFreeScramble={handleNewFreeScramble}
           smartCubeConnected={smartCubeConnected}
-          freeCurrentSplits={freeCurrentSplits}
-          freeCurrentSplitMoves={freeCurrentSplitMoves}
+          freeCurrentSplits={displayedFreeCurrentSplits}
+          freeCurrentSplitMoves={displayedFreeCurrentSplitMoves}
           freeInspectionText={freeInspectionText}
           difficulty={difficulty}
           availableDifficulties={availableDifficulties}
@@ -879,6 +984,7 @@ function App() {
           setupGuideAlg={setupGuideAlg}
           timerRunning={timerRunning}
           freeInspectionRunning={freeInspectionRunning}
+          showFreeTimerInHeadline={shouldShowPersistedFreeTimer}
           isDemoViewer={isDemoViewer}
           smartCubeDisplayMoves={smartCubeDisplayMoves}
           setupGuideComplete={setupGuideComplete}
@@ -886,7 +992,7 @@ function App() {
           demoPlayerAvailable={demoPlayerAvailable}
           demoPlayerEnabled={demoPlayerEnabled}
           setDemoPlayerEnabled={setDemoPlayerEnabled}
-          timerLabel={timerLabel}
+          timerLabel={displayedTimerLabel}
           isLiveViewer={isLiveViewer}
           smartCubeGyro={smartCubeGyro}
           smartCubeGyroSession={smartCubeGyroSession}

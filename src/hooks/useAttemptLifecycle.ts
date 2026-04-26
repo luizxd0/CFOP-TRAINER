@@ -164,6 +164,7 @@ export function useAttemptLifecycle(params: UseAttemptLifecycleParams) {
       onSetLiveSessionMoveCount(0);
       onSetMovesAfterSetup(0);
       onSetAttemptFinished(false);
+      onSetTimerElapsedMs(0);
       onSetFreeStepMarks({ crossMs: null, f2lMs: null, ollMs: null });
       onSetFreeStepMoveMarks({ crossMoves: null, f2lMoves: null, ollMoves: null });
       freeSolveLoggedRef.current = false;
@@ -192,6 +193,7 @@ export function useAttemptLifecycle(params: UseAttemptLifecycleParams) {
     onSetFreeStepMoveMarks,
     onSetLiveSessionMoveCount,
     onSetMovesAfterSetup,
+    onSetTimerElapsedMs,
     prevSetupGuideCompleteRef,
     setupGuideComplete,
     freeSolveLoggedRef,

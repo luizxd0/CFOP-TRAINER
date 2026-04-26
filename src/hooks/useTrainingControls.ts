@@ -66,9 +66,8 @@ export function useTrainingControls(params: UseTrainingControlsParams) {
   }, [mode, resetTrainingSessionFromCurrentState, setFreeScramble, setMode]);
 
   const handleNewFreeScramble = useCallback(() => {
-    resetTrainingSessionFromCurrentState();
     setFreeScramble(generateRandomScramble());
-  }, [resetTrainingSessionFromCurrentState, setFreeScramble]);
+  }, [setFreeScramble]);
 
   const handleDifficultyChange = useCallback(
     (nextDifficulty: number | "all") => {
