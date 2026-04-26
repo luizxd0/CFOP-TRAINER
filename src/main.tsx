@@ -241,14 +241,12 @@ function learningStats(cases: AlgorithmCase[], data: LearningData) {
 function orientationPrefix(orientation: CubeOrientation): string {
   // TwistyPlayer does not expose direct U/D color remapping, so we rotate the
   // puzzle frame for visualization and playback when yellow should be on top.
-  // Use z2 so Yellow becomes U while keeping Green on F in the viewer.
+  // Use z2 so Yellow becomes U while keeping Green on F.
   return orientation === "yellow-top" ? "z2" : "";
 }
 
 function remapMoveForOrientation(move: string, orientation: CubeOrientation): string {
-  // The case database is already normal CFOP notation: yellow on top, white on
-  // bottom. Only remap when the user explicitly wants to execute with white up.
-  if (orientation === "yellow-top" || move.length === 0) {
+  if (orientation === "white-top" || move.length === 0) {
     return move;
   }
   const headMap: Record<string, string> = {
