@@ -392,6 +392,20 @@ function remapAlgForOrientation(alg: string, orientation: CubeOrientation): stri
     .join(" ");
 }
 
+function invertMoveToken(token: string): string {
+  const trimmed = token.trim();
+  if (trimmed.length === 0) {
+    return trimmed;
+  }
+  if (trimmed.includes("2")) {
+    return trimmed;
+  }
+  if (trimmed.endsWith("'")) {
+    return trimmed.slice(0, -1);
+  }
+  return `${trimmed}'`;
+}
+
 function tokenToAtoms(token: string): string[] {
   const trimmed = token.trim();
   if (trimmed.length === 0) {
@@ -2295,7 +2309,6 @@ function App() {
   const [trainingSessionId, setTrainingSessionId] = useState(0);
   const [virtualSessionStartAlg, setVirtualSessionStartAlg] = useState("");
   const [sessionAwareSetupAlg, setSessionAwareSetupAlg] = useState<string | null>(null);
-  const [liveRemainingSetupAlgCanonical, setLiveRemainingSetupAlgCanonical] = useState<string | null>(null);
   const [smartCubeStateBootstrapped, setSmartCubeStateBootstrapped] = useState(false);
   const [smartCubeGyro, setSmartCubeGyro] = useState<GyroQuaternion | null>(null);
   const [smartCubeGyroSession, setSmartCubeGyroSession] = useState(0);
@@ -2336,7 +2349,6 @@ function App() {
   const pendingFaceletsValueRef = useRef<string | null>(null);
   const bootstrappingFaceletsRef = useRef(false);
   const solvedFaceletsBootstrapStreakRef = useRef(0);
-  const setupTargetSolveCacheRef = useRef<Map<string, string>>(new Map());
   const queuedPracticeCaseIdRef = useRef<string | null>(null);
   const [difficulty, setDifficulty] = useState<number | "all">(1);
   const [selectedCaseId, setSelectedCaseId] = useState("cross-1");
@@ -2648,27 +2660,11 @@ function App() {
   const targetSetupAlgForOrientation = isFreeMode ? freeScramble : setupAlgForOrientation;
   const setupGuideAlg = useMemo(
     () => {
-      const canonical =
-        smartCubeConnected &&
-        !isFreeMode &&
-        movesAfterSetup === 0 &&
-        !setupGuideComplete &&
-        liveRemainingSetupAlgCanonical !== null
-          ? liveRemainingSetupAlgCanonical
-          : (sessionAwareSetupAlg ?? targetSetupAlgCanonical);
+      const canonical = sessionAwareSetupAlg ?? targetSetupAlgCanonical;
       const raw = remapAlgForOrientation(canonical, cubeOrientation);
       return simplifyAlgText(smartCubeConnected ? stripCubeRotations(raw) : raw);
     },
-    [
-      cubeOrientation,
-      isFreeMode,
-      liveRemainingSetupAlgCanonical,
-      movesAfterSetup,
-      sessionAwareSetupAlg,
-      setupGuideComplete,
-      smartCubeConnected,
-      targetSetupAlgCanonical,
-    ],
+    [cubeOrientation, sessionAwareSetupAlg, smartCubeConnected, targetSetupAlgCanonical],
   );
   const demoPlayerAvailable = smartCubeConnected && !isFreeMode && setupGuideComplete;
   const isDemoViewer = demoPlayerAvailable && demoPlayerEnabled;
@@ -2870,7 +2866,60 @@ function App() {
       setMovesAfterSetup((current) => current + 1);
       return;
     }
-    return;
+    setSetupGuideSteps((current) => {
+      if (current.length === 0) {
+        return current;
+      }
+      // Guide steps are already generated in selected orientation notation.
+      const normalizedToken = move.raw.trim();
+      const incomingAtoms = tokenToAtoms(normalizedToken)
+        .map((atom) => atom.trim())
+        .filter((atom) => atom.length > 0);
+      if (incomingAtoms.length === 0) {
+        return current.map(cloneGuideStep);
+      }
+
+      let next = current.map(cloneGuideStep);
+      for (const normalizedMove of incomingAtoms) {
+        const activeIndex = next.findIndex((step) => step.doneAtoms < step.atoms.length);
+        if (activeIndex < 0) {
+          break;
+        }
+        const active = next[activeIndex];
+
+        if (active.atoms.length === 2 && active.doneAtoms === 0) {
+          const primary = active.atoms[0];
+          const opposite = invertMoveToken(primary);
+          if (normalizedMove === primary || normalizedMove === opposite) {
+            if (normalizedMove === opposite) {
+              active.atoms = [opposite, opposite];
+            }
+            active.doneAtoms = 1;
+            continue;
+          }
+        }
+
+        const expected = active.atoms[active.doneAtoms];
+        if (normalizedMove === expected) {
+          active.doneAtoms += 1;
+          continue;
+        }
+
+        if (
+          active.atoms.length === 2 &&
+          active.doneAtoms === 1 &&
+          normalizedMove === invertMoveToken(active.atoms[0])
+        ) {
+          // For things like U2, opposite second turn cancels the half progress.
+          active.doneAtoms = 0;
+          continue;
+        }
+
+        // Ignore mismatches instead of inserting corrective turns. This avoids
+        // runaway "infinite" guide expansion when cube orientation is misaligned.
+      }
+      return next;
+    });
   }, [freeInspectionRunning, isFreeMode]);
 
   const handleSmartCubeGyro = useCallback((quaternion: GyroQuaternion | null) => {
@@ -3520,76 +3569,6 @@ function App() {
     }
     setVirtualSessionStartAlg("");
   }, [smartCubeConnected]);
-
-  useEffect(() => {
-    // Clear computed live setup guidance when the training context changes.
-    setLiveRemainingSetupAlgCanonical(null);
-  }, [smartCubeConnected, isFreeMode, targetSetupAlgCanonical, trainingSessionId]);
-
-  useEffect(() => {
-    if (
-      !smartCubeConnected ||
-      isFreeMode ||
-      !cubeKpuzzle ||
-      !currentLivePattern ||
-      !setupTargetPattern ||
-      movesAfterSetup > 0 ||
-      setupGuideComplete
-    ) {
-      return;
-    }
-
-    if (currentLivePattern.isIdentical(setupTargetPattern)) {
-      setLiveRemainingSetupAlgCanonical("");
-      return;
-    }
-
-    let cancelled = false;
-    const targetKey = targetSetupAlgForPattern;
-    const cachedTargetSolve = setupTargetSolveCacheRef.current.get(targetKey);
-    const targetSolvePromise = cachedTargetSolve
-      ? Promise.resolve(cachedTargetSolve)
-      : experimentalSolve3x3x3IgnoringCenters(setupTargetPattern)
-          .then((targetSolveToSolved) => stripCubeRotations(targetSolveToSolved.toString()))
-          .then((normalized) => {
-            setupTargetSolveCacheRef.current.set(targetKey, normalized);
-            return normalized;
-          });
-
-    Promise.all([
-      experimentalSolve3x3x3IgnoringCenters(currentLivePattern).then((currentSolveToSolved) =>
-        stripCubeRotations(currentSolveToSolved.toString()),
-      ),
-      targetSolvePromise,
-    ])
-      .then(([currentToSolved, targetToSolved]) => {
-        if (cancelled) {
-          return;
-        }
-        const solvedToTarget = new Alg(targetToSolved).invert().toString();
-        const canonicalRemaining = simplifyAlgText(joinAlgs([currentToSolved, solvedToTarget]));
-        setLiveRemainingSetupAlgCanonical(canonicalRemaining);
-      })
-      .catch(() => {
-        if (cancelled) {
-          return;
-        }
-        // Keep the previous guidance if a solve call fails transiently.
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    cubeKpuzzle,
-    currentLivePattern,
-    isFreeMode,
-    movesAfterSetup,
-    setupGuideComplete,
-    setupTargetPattern,
-    smartCubeConnected,
-    targetSetupAlgForPattern,
-  ]);
 
   useEffect(() => {
     const nextSteps = buildGuideStepsFromAlg(setupGuideAlg);
