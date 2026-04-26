@@ -568,13 +568,52 @@ function simplifyAlgText(alg: string): string {
     return "";
   }
   try {
-    return new Alg(normalized)
+    const simplified = new Alg(normalized)
       .experimentalSimplify({ cancel: true })
       .toString()
       .trim();
+    return normalizeMoveAmounts(simplified);
   } catch {
-    return normalized;
+    return normalizeMoveAmounts(normalized);
   }
+}
+
+function normalizeMoveAmounts(alg: string): string {
+  const stack: Array<{ family: string; amount: number }> = [];
+  const out: string[] = [];
+  const flushStack = () => {
+    for (const item of stack.splice(0)) {
+      const amount = ((item.amount % 4) + 4) % 4;
+      if (amount === 0) {
+        continue;
+      }
+      if (amount === 1) {
+        out.push(item.family);
+      } else if (amount === 2) {
+        out.push(`${item.family}2`);
+      } else {
+        out.push(`${item.family}'`);
+      }
+    }
+  };
+
+  for (const token of splitAlgTokens(alg)) {
+    try {
+      const move = Move.fromString(token);
+      const top = stack[stack.length - 1];
+      if (top && top.family === move.family) {
+        top.amount += move.amount;
+      } else {
+        stack.push({ family: move.family, amount: move.amount });
+      }
+    } catch {
+      flushStack();
+      out.push(token);
+    }
+  }
+  flushStack();
+
+  return out.join(" ");
 }
 
 type FaceLetter = "U" | "D" | "R" | "L" | "F" | "B";
