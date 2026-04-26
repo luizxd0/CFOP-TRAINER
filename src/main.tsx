@@ -2637,12 +2637,12 @@ function App() {
     [solutionForPattern, targetSetupAlgCanonical],
   );
   const setupAlgForOrientation = useMemo(
-    () => activeCaseWithTrainingSetup.setup,
-    [activeCaseWithTrainingSetup.setup],
+    () => remapAlgForOrientation(activeCaseWithTrainingSetup.setup, cubeOrientation),
+    [activeCaseWithTrainingSetup.setup, cubeOrientation],
   );
   const solutionAlgForOrientation = useMemo(
-    () => solution,
-    [solution],
+    () => remapAlgForOrientation(solution, cubeOrientation),
+    [solution, cubeOrientation],
   );
   const smartCubeAlgCanonical = useMemo(
     () => smartCubeMoves.join(" "),
@@ -2659,10 +2659,11 @@ function App() {
   const targetSetupAlgForOrientation = isFreeMode ? freeScramble : setupAlgForOrientation;
   const setupGuideAlg = useMemo(
     () => {
-      const raw = sessionAwareSetupAlg ?? targetSetupAlgCanonical;
+      const canonical = sessionAwareSetupAlg ?? targetSetupAlgCanonical;
+      const raw = remapAlgForOrientation(canonical, cubeOrientation);
       return simplifyAlgText(smartCubeConnected ? stripCubeRotations(raw) : raw);
     },
-    [sessionAwareSetupAlg, smartCubeConnected, targetSetupAlgCanonical],
+    [cubeOrientation, sessionAwareSetupAlg, smartCubeConnected, targetSetupAlgCanonical],
   );
   const demoPlayerAvailable = smartCubeConnected && !isFreeMode && setupGuideComplete;
   const isDemoViewer = demoPlayerAvailable && demoPlayerEnabled;
@@ -2868,8 +2869,8 @@ function App() {
       if (current.length === 0) {
         return current;
       }
-      // Guide tracking must use canonical tokens matching the shown setup guide.
-      const normalizedToken = move.raw.trim();
+      // Guide tracking must match displayed orientation notation.
+      const normalizedToken = remapMoveForOrientation(move.raw, cubeOrientation).trim();
       const incomingAtoms = tokenToAtoms(normalizedToken)
         .map((atom) => atom.trim())
         .filter((atom) => atom.length > 0);
@@ -4322,7 +4323,7 @@ function App() {
               gyroSession={smartCubeGyroSession}
               orientationNotice={
                 !isFreeMode && cubeOrientation === "yellow-top"
-                  ? "Yellow Top selected: execute setup/solution with White on top for accurate F2L targets."
+                  ? "Yellow Top selected: execute setup/solution with Yellow on top (same as selected orientation)."
                   : null
               }
             />
