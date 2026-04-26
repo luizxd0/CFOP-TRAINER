@@ -63,6 +63,7 @@ type UseAttemptLifecycleParams = {
   onSetFreeInspectionRemainingMs: React.Dispatch<React.SetStateAction<number | null>>;
   onSetFreeStepMarks: (value: { crossMs: number | null; f2lMs: number | null; ollMs: number | null } | ((prev: { crossMs: number | null; f2lMs: number | null; ollMs: number | null }) => { crossMs: number | null; f2lMs: number | null; ollMs: number | null })) => void;
   onSetFreeLastSolves: (updater: (current: Array<{ totalMs: number; crossMs: number; f2lMs: number; ollMs: number; pllMs: number; finishedAt: number }>) => Array<{ totalMs: number; crossMs: number; f2lMs: number; ollMs: number; pllMs: number; finishedAt: number }>) => void;
+  onLogStageSolve: (stage: string, totalMs: number) => void;
   logPracticeTiming: (caseId: string, totalMs: number) => void;
   demoPlayerAvailable: boolean;
 };
@@ -113,6 +114,7 @@ export function useAttemptLifecycle(params: UseAttemptLifecycleParams) {
     onSetFreeInspectionRemainingMs,
     onSetFreeStepMarks,
     onSetFreeLastSolves,
+    onLogStageSolve,
     logPracticeTiming,
     demoPlayerAvailable,
   } = params;
@@ -295,6 +297,9 @@ export function useAttemptLifecycle(params: UseAttemptLifecycleParams) {
       if (!isFreeMode && activeCaseStage !== "cross") {
         logPracticeTiming(activeCaseId, totalMs);
       }
+      if (!isFreeMode) {
+        onLogStageSolve(stage, totalMs);
+      }
       if (isFreeMode && !freeSolveLoggedRef.current) {
         const crossAt = freeStepMarks.crossMs ?? totalMs;
         const f2lAt = freeStepMarks.f2lMs ?? totalMs;
@@ -331,6 +336,7 @@ export function useAttemptLifecycle(params: UseAttemptLifecycleParams) {
     solvedPattern,
     activeCaseId,
     activeCaseStage,
+    onLogStageSolve,
     logPracticeTiming,
     onSetFreeLastSolves,
     onSetAttemptFinished,

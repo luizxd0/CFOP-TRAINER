@@ -9,6 +9,7 @@ import type { CubeOrientation } from "../lib/notation";
 import type { GuideStepState } from "../lib/guide";
 import type { GyroQuaternion } from "../lib/cubePattern";
 import type { AlgorithmCase } from "../data/cfopData";
+import type { SolveRecord } from "../types/app";
 
 type CubeSkin = "classic" | "f2l";
 
@@ -71,7 +72,7 @@ export function TrainingPage({
   handleSmartCubeConnectionChange,
   handleSmartCubeResetLiveState,
   smartCubeStateBootstrapped,
-  freeLastSolves,
+  smartPanelSolves,
 }: {
   isFreeMode: boolean;
   handleFreeMode: () => void;
@@ -131,7 +132,7 @@ export function TrainingPage({
   handleSmartCubeConnectionChange: (connected: boolean) => void;
   handleSmartCubeResetLiveState: () => void;
   smartCubeStateBootstrapped: boolean;
-  freeLastSolves: Array<{ totalMs: number; crossMs: number; f2lMs: number; ollMs: number; pllMs: number; finishedAt: number }>;
+  smartPanelSolves: SolveRecord[];
 }) {
   return (
     <section className="trainer-layout trainer-layout-standalone">
@@ -403,7 +404,7 @@ export function TrainingPage({
         onResetLiveState={handleSmartCubeResetLiveState}
         liveStateReady={smartCubeStateBootstrapped}
         cubeOrientation={cubeOrientation}
-        freeLastSolves={freeLastSolves}
+        recentSolves={smartPanelSolves}
       />
     </section>
   );

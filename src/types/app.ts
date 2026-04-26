@@ -14,3 +14,8 @@ export type FreeSolveRecord = {
   pllMs: number;
   finishedAt: number;
 };
+
+export type SolveRecord = {
+  totalMs: number;
+  finishedAt: number;
+};

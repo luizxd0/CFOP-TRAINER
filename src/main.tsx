@@ -65,6 +65,7 @@ import type {
   FreeSolveRecord,
   LearningSubsetFilter,
   LearnStage,
+  SolveRecord,
 } from "./types/app";
 import "./styles.css";
 
@@ -143,6 +144,12 @@ function App() {
     ollMs: null,
   });
   const [freeLastSolves, setFreeLastSolves] = useState<FreeSolveRecord[]>([]);
+  const [stageLastSolves, setStageLastSolves] = useState<Record<Stage, SolveRecord[]>>({
+    cross: [],
+    f2l: [],
+    oll: [],
+    pll: [],
+  });
   const freeSolveLoggedRef = useRef(false);
   const freeLastSplitMoveCountRef = useRef(0);
   const freeSplitSideRef = useRef<CrossSide | null>(null);
@@ -313,6 +320,22 @@ function App() {
     freeInspectionRunning,
     freeInspectionRemainingMs,
   });
+  const logStageSolve = useCallback((solveStage: string, totalMs: number) => {
+    if (solveStage !== "cross" && solveStage !== "f2l" && solveStage !== "oll" && solveStage !== "pll") {
+      return;
+    }
+    setStageLastSolves((current) => ({
+      ...current,
+      [solveStage]: [
+        { totalMs, finishedAt: Date.now() },
+        ...current[solveStage],
+      ].slice(0, 5),
+    }));
+  }, []);
+  const smartPanelSolves = useMemo<SolveRecord[]>(
+    () => (isFreeMode ? freeLastSolves.map((solve) => ({ totalMs: solve.totalMs, finishedAt: solve.finishedAt })) : stageLastSolves[stage]),
+    [freeLastSolves, isFreeMode, stage, stageLastSolves],
+  );
   const totalCaseCount = useMemo(
     () => stages.reduce((sum, item) => sum + casesForStage(item).length, 0),
     [],
@@ -670,6 +693,7 @@ function App() {
     onSetFreeInspectionRemainingMs: setFreeInspectionRemainingMs,
     onSetFreeStepMarks: setFreeStepMarks,
     onSetFreeLastSolves: setFreeLastSolves,
+    onLogStageSolve: logStageSolve,
     logPracticeTiming,
     demoPlayerAvailable,
   });
@@ -703,6 +727,9 @@ function App() {
         if (!isFreeMode && activeCaseWithTrainingSetup.stage !== "cross") {
           logPracticeTiming(activeCaseWithTrainingSetup.id, totalMs);
         }
+        if (!isFreeMode) {
+          logStageSolve(activeCaseWithTrainingSetup.stage, totalMs);
+        }
         setTimerRunning(false);
         timerRunningRef.current = false;
         setTimerElapsedMs(totalMs);
@@ -730,6 +757,7 @@ function App() {
     activeCaseWithTrainingSetup.stage,
     isFreeMode,
     logPracticeTiming,
+    logStageSolve,
     smartCubeConnected,
     timerElapsedMs,
     timerRunning,
@@ -835,7 +863,7 @@ function App() {
           handleSmartCubeConnectionChange={handleSmartCubeConnectionChange}
           handleSmartCubeResetLiveState={handleSmartCubeResetLiveState}
           smartCubeStateBootstrapped={smartCubeStateBootstrapped}
-          freeLastSolves={freeLastSolves}
+          smartPanelSolves={smartPanelSolves}
         />
       </main>
     );

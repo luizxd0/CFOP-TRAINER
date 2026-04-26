@@ -17,6 +17,7 @@ import { formatMs } from "../lib/time";
 import type { CubeOrientation } from "../lib/notation";
 import { remapMoveForOrientation, remapMoveForPerspective } from "../lib/notation";
 import { normalizeQuaternion, type GyroQuaternion } from "../lib/cubePattern";
+import type { SolveRecord } from "../types/app";
 import {
   isMissingCubeMacError,
   maskFacelets,
@@ -24,11 +25,6 @@ import {
   smartCubeDebug,
   webBluetoothBlockReason,
 } from "../lib/smartcubeUtils";
-
-type FreeSolveRecord = {
-  totalMs: number;
-  finishedAt: number;
-};
 
 export function SmartCubePanel({
   onMove,
@@ -38,7 +34,7 @@ export function SmartCubePanel({
   onResetLiveState,
   liveStateReady,
   cubeOrientation,
-  freeLastSolves,
+  recentSolves,
 }: {
   onMove?: (move: { raw: string; display: string }) => void;
   onGyro?: (quaternion: GyroQuaternion | null) => void;
@@ -47,7 +43,7 @@ export function SmartCubePanel({
   onResetLiveState?: () => void;
   liveStateReady: boolean;
   cubeOrientation: CubeOrientation;
-  freeLastSolves: FreeSolveRecord[];
+  recentSolves: SolveRecord[];
 }) {
   const [support, setSupport] = useState("Checking browser support...");
   const [status, setStatus] = useState("Not connected");
@@ -500,8 +496,8 @@ export function SmartCubePanel({
   const bluetoothBlockedReason = webBluetoothBlockReason();
   const connectDisabled = bluetoothBlockedReason !== null;
   const rankedBestSolves = useMemo(
-    () => [...freeLastSolves].sort((a, b) => a.totalMs - b.totalMs).slice(0, 5),
-    [freeLastSolves],
+    () => [...recentSolves].sort((a, b) => a.totalMs - b.totalMs).slice(0, 5),
+    [recentSolves],
   );
   const rankedAverageMs = useMemo(() => {
     if (rankedBestSolves.length === 0) {
