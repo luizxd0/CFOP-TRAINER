@@ -2657,6 +2657,12 @@ function App() {
     [liveSessionStartMoves],
   );
   const targetSetupAlgForOrientation = isFreeMode ? freeScramble : setupAlgForOrientation;
+  const targetSetupAlgForPlayback =
+    cubeOrientation === "yellow-top" ? targetSetupAlgCanonical : targetSetupAlgForOrientation;
+  const solutionAlgForPlayback =
+    cubeOrientation === "yellow-top" ? solution : solutionAlgForOrientation;
+  const smartCubeAlgForPlayback =
+    cubeOrientation === "yellow-top" ? smartCubeAlgCanonical : smartCubeAlgForOrientation;
   const setupGuideAlg = useMemo(
     () => {
       const canonical = sessionAwareSetupAlg ?? targetSetupAlgCanonical;
@@ -2678,12 +2684,12 @@ function App() {
   // In live mode we must use setup (not alg) so the cube shows current state immediately.
   const viewerSetup = isDemoViewer
     ? smartCubeConnected
-      ? smartCubeAlgForOrientation
-      : targetSetupAlgForOrientation
+      ? smartCubeAlgForPlayback
+      : targetSetupAlgForPlayback
     : isLiveViewer
-    ? smartCubeAlgForOrientation
-    : targetSetupAlgForOrientation;
-  const viewerAlg = isDemoViewer || (!isLiveViewer && !isFreeMode) ? solutionAlgForOrientation : "";
+    ? smartCubeAlgForPlayback
+    : targetSetupAlgForPlayback;
+  const viewerAlg = isDemoViewer || (!isLiveViewer && !isFreeMode) ? solutionAlgForPlayback : "";
   const viewerContextMoves = isLiveViewer ? liveSessionMoveCount : isFreeMode ? 0 : moveCount(contextAlg);
   const setupGuideStepViews = useMemo(
     () => {
