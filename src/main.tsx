@@ -241,8 +241,8 @@ function learningStats(cases: AlgorithmCase[], data: LearningData) {
 function orientationPrefix(orientation: CubeOrientation): string {
   // TwistyPlayer does not expose direct U/D color remapping, so we rotate the
   // puzzle frame for visualization and playback when yellow should be on top.
-  // Use x2 so Yellow becomes U while keeping Green on F.
-  return orientation === "yellow-top" ? "x2" : "";
+  // Use z2 so Yellow becomes U while keeping Green on F.
+  return orientation === "yellow-top" ? "z2" : "";
 }
 
 function remapMoveForOrientation(move: string, orientation: CubeOrientation): string {
@@ -252,16 +252,16 @@ function remapMoveForOrientation(move: string, orientation: CubeOrientation): st
   const headMap: Record<string, string> = {
     U: "D",
     D: "U",
-    R: "R",
-    L: "L",
-    F: "B",
-    B: "F",
+    R: "L",
+    L: "R",
+    F: "F",
+    B: "B",
     u: "d",
     d: "u",
-    r: "r",
-    l: "l",
-    f: "b",
-    b: "f",
+    r: "l",
+    l: "r",
+    f: "f",
+    b: "b",
     M: "M",
     E: "E",
     S: "S",
@@ -936,7 +936,7 @@ function CubeViewer({
     new THREE.Quaternion().setFromEuler(new THREE.Euler((15 * Math.PI) / 180, (-5 * Math.PI) / 180, 0)),
   );
   const yellowTopRotationRef = useRef(
-    new THREE.Quaternion().setFromEuler(new THREE.Euler(Math.PI, 0, 0)),
+    new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0, Math.PI)),
   );
   const liveTargetQuaternionRef = useRef(
     new THREE.Quaternion().setFromEuler(new THREE.Euler((15 * Math.PI) / 180, (-20 * Math.PI) / 180, 0)),
@@ -1114,7 +1114,7 @@ function CubeViewer({
 
     const relativeOrientation = mapped.clone().premultiply(gyroBasisRef.current);
     if (cubeOrientation === "yellow-top") {
-      // Keep gyro frame aligned with x2 orientation used for yellow-top visualization.
+      // Keep gyro frame aligned with z2 orientation used for yellow-top visualization.
       relativeOrientation
         .premultiply(yellowTopRotationRef.current)
         .multiply(yellowTopRotationRef.current);
@@ -1584,7 +1584,7 @@ function SmartCubePanel({
   const gyroBasisForMovesRef = useRef<THREE.Quaternion | null>(null);
   const gyroRelativeForMovesRef = useRef<THREE.Quaternion>(new THREE.Quaternion());
   const yellowTopRotationRef = useRef(
-    new THREE.Quaternion().setFromEuler(new THREE.Euler(Math.PI, 0, 0)),
+    new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0, Math.PI)),
   );
   const clearInitialFaceletsSync = useCallback(() => {
     if (initialFaceletsSyncTimerRef.current !== null) {
@@ -2336,7 +2336,6 @@ function App() {
   const pendingFaceletsValueRef = useRef<string | null>(null);
   const bootstrappingFaceletsRef = useRef(false);
   const solvedFaceletsBootstrapStreakRef = useRef(0);
-  const setupTargetSolveCacheRef = useRef<Map<string, string>>(new Map());
   const queuedPracticeCaseIdRef = useRef<string | null>(null);
   const [difficulty, setDifficulty] = useState<number | "all">(1);
   const [selectedCaseId, setSelectedCaseId] = useState("cross-1");
@@ -2870,8 +2869,13 @@ function App() {
       setMovesAfterSetup((current) => current + 1);
       return;
     }
+    setLiveRemainingSetupAlgCanonical((current) => {
+      const base = current ?? sessionAwareSetupAlg ?? targetSetupAlgCanonical;
+      const inverseMove = new Alg(move.raw).invert().toString();
+      return simplifyAlgText(joinAlgs([inverseMove, base]));
+    });
     return;
-  }, [freeInspectionRunning, isFreeMode]);
+  }, [freeInspectionRunning, isFreeMode, sessionAwareSetupAlg, targetSetupAlgCanonical]);
 
   const handleSmartCubeGyro = useCallback((quaternion: GyroQuaternion | null) => {
     setSmartCubeGyro(quaternion);
@@ -2886,6 +2890,7 @@ function App() {
     setLiveSessionMoveCount(0);
     setSmartCubeDisplayMoves([]);
     setSessionAwareSetupAlg(null);
+    setLiveRemainingSetupAlgCanonical(null);
     setTrainingSessionId((current) => current + 1);
     setSetupGuideComplete(false);
     setupGuideCompleteRef.current = false;
@@ -2913,6 +2918,7 @@ function App() {
     setLiveSessionMoveCount(0);
     setSmartCubeDisplayMoves([]);
     setSessionAwareSetupAlg(null);
+    setLiveRemainingSetupAlgCanonical(null);
     setTrainingSessionId((current) => current + 1);
     setSetupGuideComplete(false);
     setupGuideCompleteRef.current = false;
@@ -2989,6 +2995,7 @@ function App() {
         setLiveSessionMoveCount(0);
         setSmartCubeDisplayMoves([]);
         setSessionAwareSetupAlg(null);
+        setLiveRemainingSetupAlgCanonical(null);
         setTrainingSessionId((current) => current + 1);
         setSetupGuideComplete(false);
         setupGuideCompleteRef.current = false;
@@ -3522,73 +3529,22 @@ function App() {
   }, [smartCubeConnected]);
 
   useEffect(() => {
-    // Clear computed live setup guidance when the training context changes.
-    setLiveRemainingSetupAlgCanonical(null);
-  }, [smartCubeConnected, isFreeMode, targetSetupAlgCanonical, trainingSessionId]);
-
-  useEffect(() => {
-    if (
-      !smartCubeConnected ||
-      isFreeMode ||
-      !cubeKpuzzle ||
-      !currentLivePattern ||
-      !setupTargetPattern ||
-      movesAfterSetup > 0 ||
-      setupGuideComplete
-    ) {
+    if (!smartCubeConnected || isFreeMode) {
+      setLiveRemainingSetupAlgCanonical(null);
       return;
     }
-
-    if (currentLivePattern.isIdentical(setupTargetPattern)) {
-      setLiveRemainingSetupAlgCanonical("");
+    if (movesAfterSetup > 0 || setupGuideComplete) {
       return;
     }
-
-    let cancelled = false;
-    const targetKey = targetSetupAlgForPattern;
-    const cachedTargetSolve = setupTargetSolveCacheRef.current.get(targetKey);
-    const targetSolvePromise = cachedTargetSolve
-      ? Promise.resolve(cachedTargetSolve)
-      : experimentalSolve3x3x3IgnoringCenters(setupTargetPattern)
-          .then((targetSolveToSolved) => stripCubeRotations(targetSolveToSolved.toString()))
-          .then((normalized) => {
-            setupTargetSolveCacheRef.current.set(targetKey, normalized);
-            return normalized;
-          });
-
-    Promise.all([
-      experimentalSolve3x3x3IgnoringCenters(currentLivePattern).then((currentSolveToSolved) =>
-        stripCubeRotations(currentSolveToSolved.toString()),
-      ),
-      targetSolvePromise,
-    ])
-      .then(([currentToSolved, targetToSolved]) => {
-        if (cancelled) {
-          return;
-        }
-        const solvedToTarget = new Alg(targetToSolved).invert().toString();
-        const canonicalRemaining = simplifyAlgText(joinAlgs([currentToSolved, solvedToTarget]));
-        setLiveRemainingSetupAlgCanonical(canonicalRemaining);
-      })
-      .catch(() => {
-        if (cancelled) {
-          return;
-        }
-        // Keep the previous guidance if a solve call fails transiently.
-      });
-
-    return () => {
-      cancelled = true;
-    };
+    setLiveRemainingSetupAlgCanonical(sessionAwareSetupAlg ?? targetSetupAlgCanonical);
   }, [
-    cubeKpuzzle,
-    currentLivePattern,
     isFreeMode,
     movesAfterSetup,
+    sessionAwareSetupAlg,
     setupGuideComplete,
-    setupTargetPattern,
     smartCubeConnected,
-    targetSetupAlgForPattern,
+    targetSetupAlgCanonical,
+    trainingSessionId,
   ]);
 
   useEffect(() => {
