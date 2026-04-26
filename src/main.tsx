@@ -241,8 +241,7 @@ function learningStats(cases: AlgorithmCase[], data: LearningData) {
 function orientationPrefix(orientation: CubeOrientation): string {
   // TwistyPlayer does not expose direct U/D color remapping, so we rotate the
   // puzzle frame for visualization and playback when yellow should be on top.
-  // Use x2 so Yellow becomes U while keeping Green on F.
-  return orientation === "yellow-top" ? "x2" : "";
+  return orientation === "yellow-top" ? "z2" : "";
 }
 
 function remapMoveForOrientation(move: string, orientation: CubeOrientation): string {
@@ -252,16 +251,16 @@ function remapMoveForOrientation(move: string, orientation: CubeOrientation): st
   const headMap: Record<string, string> = {
     U: "D",
     D: "U",
-    R: "R",
-    L: "L",
-    F: "B",
-    B: "F",
+    R: "L",
+    L: "R",
+    F: "F",
+    B: "B",
     u: "d",
     d: "u",
-    r: "r",
-    l: "l",
-    f: "b",
-    b: "f",
+    r: "l",
+    l: "r",
+    f: "f",
+    b: "b",
     M: "M",
     E: "E",
     S: "S",
@@ -950,7 +949,7 @@ function CubeViewer({
     new THREE.Quaternion().setFromEuler(new THREE.Euler((15 * Math.PI) / 180, (-5 * Math.PI) / 180, 0)),
   );
   const yellowTopRotationRef = useRef(
-    new THREE.Quaternion().setFromEuler(new THREE.Euler(Math.PI, 0, 0)),
+    new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0, Math.PI)),
   );
   const liveTargetQuaternionRef = useRef(
     new THREE.Quaternion().setFromEuler(new THREE.Euler((15 * Math.PI) / 180, (-20 * Math.PI) / 180, 0)),
@@ -1128,7 +1127,7 @@ function CubeViewer({
 
     const relativeOrientation = mapped.clone().premultiply(gyroBasisRef.current);
     if (cubeOrientation === "yellow-top") {
-      // Keep gyro frame aligned with x2 orientation used for yellow-top visualization.
+      // Keep gyro frame aligned with z2 orientation used for yellow-top visualization.
       relativeOrientation
         .premultiply(yellowTopRotationRef.current)
         .multiply(yellowTopRotationRef.current);
@@ -1598,7 +1597,7 @@ function SmartCubePanel({
   const gyroBasisForMovesRef = useRef<THREE.Quaternion | null>(null);
   const gyroRelativeForMovesRef = useRef<THREE.Quaternion>(new THREE.Quaternion());
   const yellowTopRotationRef = useRef(
-    new THREE.Quaternion().setFromEuler(new THREE.Euler(Math.PI, 0, 0)),
+    new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0, Math.PI)),
   );
   const clearInitialFaceletsSync = useCallback(() => {
     if (initialFaceletsSyncTimerRef.current !== null) {
@@ -2870,8 +2869,8 @@ function App() {
       if (current.length === 0) {
         return current;
       }
-      // Guide steps are already generated in selected orientation notation.
-      const normalizedToken = move.raw.trim();
+      // Guide tracking must match displayed orientation notation.
+      const normalizedToken = remapMoveForOrientation(move.raw, cubeOrientation).trim();
       const incomingAtoms = tokenToAtoms(normalizedToken)
         .map((atom) => atom.trim())
         .filter((atom) => atom.length > 0);
@@ -2920,7 +2919,7 @@ function App() {
       }
       return next;
     });
-  }, [freeInspectionRunning, isFreeMode]);
+  }, [cubeOrientation, freeInspectionRunning, isFreeMode]);
 
   const handleSmartCubeGyro = useCallback((quaternion: GyroQuaternion | null) => {
     setSmartCubeGyro(quaternion);
