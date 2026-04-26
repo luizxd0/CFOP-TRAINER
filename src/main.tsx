@@ -2637,12 +2637,12 @@ function App() {
     [solutionForPattern, targetSetupAlgCanonical],
   );
   const setupAlgForOrientation = useMemo(
-    () => remapAlgForOrientation(activeCaseWithTrainingSetup.setup, cubeOrientation),
-    [activeCaseWithTrainingSetup.setup, cubeOrientation],
+    () => activeCaseWithTrainingSetup.setup,
+    [activeCaseWithTrainingSetup.setup],
   );
   const solutionAlgForOrientation = useMemo(
-    () => remapAlgForOrientation(solution, cubeOrientation),
-    [solution, cubeOrientation],
+    () => solution,
+    [solution],
   );
   const smartCubeAlgCanonical = useMemo(
     () => smartCubeMoves.join(" "),
@@ -2659,11 +2659,10 @@ function App() {
   const targetSetupAlgForOrientation = isFreeMode ? freeScramble : setupAlgForOrientation;
   const setupGuideAlg = useMemo(
     () => {
-      const canonical = sessionAwareSetupAlg ?? targetSetupAlgCanonical;
-      const raw = remapAlgForOrientation(canonical, cubeOrientation);
+      const raw = sessionAwareSetupAlg ?? targetSetupAlgCanonical;
       return simplifyAlgText(smartCubeConnected ? stripCubeRotations(raw) : raw);
     },
-    [cubeOrientation, sessionAwareSetupAlg, smartCubeConnected, targetSetupAlgCanonical],
+    [sessionAwareSetupAlg, smartCubeConnected, targetSetupAlgCanonical],
   );
   const demoPlayerAvailable = smartCubeConnected && !isFreeMode && setupGuideComplete;
   const isDemoViewer = demoPlayerAvailable && demoPlayerEnabled;
@@ -2869,8 +2868,8 @@ function App() {
       if (current.length === 0) {
         return current;
       }
-      // Guide tracking must match displayed orientation notation.
-      const normalizedToken = remapMoveForOrientation(move.raw, cubeOrientation).trim();
+      // Guide tracking uses canonical trainer notation.
+      const normalizedToken = move.raw.trim();
       const incomingAtoms = tokenToAtoms(normalizedToken)
         .map((atom) => atom.trim())
         .filter((atom) => atom.length > 0);
@@ -2914,15 +2913,8 @@ function App() {
           continue;
         }
 
-        const corrective = invertMoveToken(normalizedMove);
-        if (corrective.length > 0) {
-          next.splice(activeIndex, 0, {
-            label: corrective,
-            atoms: [corrective],
-            doneAtoms: 0,
-          });
-          next = normalizePendingGuideSteps(next);
-        }
+        // Ignore mismatches instead of inserting corrective turns. This avoids
+        // runaway "infinite" guide expansion when cube orientation is misaligned.
       }
       return next;
     });
@@ -4322,8 +4314,8 @@ function App() {
               gyroQuaternion={smartCubeConnected ? smartCubeGyro : null}
               gyroSession={smartCubeGyroSession}
               orientationNotice={
-                !isFreeMode && cubeOrientation === "yellow-top"
-                  ? "Yellow Top selected: execute setup/solution with Yellow on top (same as selected orientation)."
+                !isFreeMode
+                  ? "Trainer setup notation: hold White on top and Green on front while executing setup/solution."
                   : null
               }
             />
