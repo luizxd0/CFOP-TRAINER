@@ -599,7 +599,7 @@ const IDENTITY_FACE_MAP: FaceMap = {
   B: "B",
 };
 const ROT_STEP_LOCAL_TO_PREV: Record<"x" | "y" | "z", FaceMap> = {
-  x: { U: "B", B: "D", D: "F", F: "U", R: "R", L: "L" },
+  x: { U: "F", F: "D", D: "B", B: "U", R: "R", L: "L" },
   y: { F: "R", R: "B", B: "L", L: "F", U: "U", D: "D" },
   z: { U: "L", L: "D", D: "R", R: "U", F: "F", B: "B" },
 };
@@ -908,6 +908,7 @@ function CubeViewer({
   isLive = false,
   gyroQuaternion = null,
   gyroSession = 0,
+  orientationNotice = null,
 }: {
   setup: string;
   alg: string;
@@ -932,6 +933,7 @@ function CubeViewer({
   isLive?: boolean;
   gyroQuaternion?: GyroQuaternion | null;
   gyroSession?: number;
+  orientationNotice?: string | null;
 }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const playerRef = useRef<TwistyPlayer | null>(null);
@@ -1257,6 +1259,18 @@ function CubeViewer({
       </div>
       {(headlineAlg || (timerInHeadline && headlineTimerActive && timerLabel)) && (
         <div className={`viewer-headline ${showGuideInHeadline ? "with-guide" : ""}`}>
+          {orientationNotice && (
+            <div
+              style={{
+                marginBottom: "0.45rem",
+                textAlign: "center",
+                color: "#ffd966",
+                fontWeight: 700,
+              }}
+            >
+              {orientationNotice}
+            </div>
+          )}
           {timerInHeadline && headlineTimerActive && timerLabel ? (
             <strong className={`viewer-timer-headline ${isTimerRunning ? "running" : ""}`}>{timerLabel}</strong>
           ) : (
@@ -2603,7 +2617,8 @@ function App() {
       };
     }
 
-    const setup = joinAlgs([contextAlg, activeCase.baseSetup]);
+    const normalizedCaseSetup = stripCubeRotations(activeCase.baseSetup);
+    const setup = joinAlgs([contextAlg, normalizedCaseSetup]);
     return { ...activeCase, setup };
   }, [activeCase, contextAlg, crossDifficulty, crossGenerated, isCross]);
 
@@ -2644,10 +2659,10 @@ function App() {
   const targetSetupAlgForOrientation = isFreeMode ? freeScramble : setupAlgForOrientation;
   const setupGuideAlg = useMemo(
     () => {
-      const raw = sessionAwareSetupAlg ?? targetSetupAlgForOrientation;
+      const raw = sessionAwareSetupAlg ?? targetSetupAlgCanonical;
       return simplifyAlgText(smartCubeConnected ? stripCubeRotations(raw) : raw);
     },
-    [sessionAwareSetupAlg, smartCubeConnected, targetSetupAlgForOrientation],
+    [sessionAwareSetupAlg, smartCubeConnected, targetSetupAlgCanonical],
   );
   const demoPlayerAvailable = smartCubeConnected && !isFreeMode && setupGuideComplete;
   const isDemoViewer = demoPlayerAvailable && demoPlayerEnabled;
@@ -2661,7 +2676,9 @@ function App() {
       : activeCaseWithTrainingSetup.name;
   // In live mode we must use setup (not alg) so the cube shows current state immediately.
   const viewerSetup = isDemoViewer
-    ? targetSetupAlgForOrientation
+    ? smartCubeConnected
+      ? smartCubeAlgForOrientation
+      : targetSetupAlgForOrientation
     : isLiveViewer
     ? smartCubeAlgForOrientation
     : targetSetupAlgForOrientation;
@@ -2851,8 +2868,8 @@ function App() {
       if (current.length === 0) {
         return current;
       }
-      // Guide tracking must use cube-state notation (not gyro-perspective display labels).
-      const normalizedToken = remapMoveForOrientation(move.raw, cubeOrientation).trim();
+      // Guide tracking must use canonical tokens matching the shown setup guide.
+      const normalizedToken = move.raw.trim();
       const incomingAtoms = tokenToAtoms(normalizedToken)
         .map((atom) => atom.trim())
         .filter((atom) => atom.length > 0);
@@ -3515,27 +3532,8 @@ function App() {
     }
 
     const sessionStartPattern = cubeKpuzzle.defaultPattern().applyAlg(liveSessionStartAlgCanonical);
-    const solved = cubeKpuzzle.defaultPattern();
-    if (
-      (stage === "f2l" &&
-        isCrossSolved(
-          sessionStartPattern as unknown as { patternData: Record<string, any> },
-          solved as unknown as { patternData: Record<string, any> },
-        )) ||
-      (stage === "oll" &&
-        isF2LSolved(
-          sessionStartPattern as unknown as { patternData: Record<string, any> },
-          solved as unknown as { patternData: Record<string, any> },
-        )) ||
-      (stage === "pll" &&
-        isOllSolved(
-          sessionStartPattern as unknown as { patternData: Record<string, any> },
-          solved as unknown as { patternData: Record<string, any> },
-        ))
-    ) {
-      setSessionAwareSetupAlg(simplifyAlgText(activeCase.baseSetup));
-      return;
-    }
+    // Always normalize from the actual current cube state, then apply the
+    // target setup. Stage shortcuts can drift from the intended exact case.
     void experimentalSolve3x3x3IgnoringCenters(sessionStartPattern)
       .then((solveToSolved) => {
         if (cancelled) {
@@ -3563,9 +3561,7 @@ function App() {
     isFreeMode,
     liveSessionStartAlgCanonical,
     targetSetupAlgCanonical,
-    activeCase.baseSetup,
     cubeOrientation,
-    stage,
     smartCubeConnected,
     trainingSessionId,
     virtualSessionStartAlg,
@@ -4026,20 +4022,11 @@ function App() {
   }, [expectedPostAttemptAlg, resetTrainingSessionFromCurrentState, stage]);
 
   useEffect(() => {
-    if (view !== "training" || isFreeMode || !attemptFinished) {
-      return;
+    if (autoAdvanceTimeoutRef.current !== null) {
+      window.clearTimeout(autoAdvanceTimeoutRef.current);
+      autoAdvanceTimeoutRef.current = null;
     }
-    const timeout = window.setTimeout(() => {
-      repeatCurrentTrainingCase();
-    }, 1200);
-    autoAdvanceTimeoutRef.current = timeout;
-    return () => {
-      if (autoAdvanceTimeoutRef.current !== null) {
-        window.clearTimeout(autoAdvanceTimeoutRef.current);
-        autoAdvanceTimeoutRef.current = null;
-      }
-    };
-  }, [attemptFinished, isFreeMode, repeatCurrentTrainingCase, view]);
+  }, [attemptFinished, isFreeMode, view]);
 
   if (view === "training") {
     return (
@@ -4333,6 +4320,11 @@ function App() {
               isLive={isLiveViewer}
               gyroQuaternion={smartCubeConnected ? smartCubeGyro : null}
               gyroSession={smartCubeGyroSession}
+              orientationNotice={
+                !isFreeMode && cubeOrientation === "yellow-top"
+                  ? "Yellow Top selected: execute setup/solution with White on top for accurate F2L targets."
+                  : null
+              }
             />
           </div>
 
