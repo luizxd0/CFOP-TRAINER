@@ -1,4 +1,5 @@
 import { allCases, type AlgorithmCase, type Stage } from "../data/cfopData";
+import { Alg } from "cubing/alg";
 
 export const stages: Stage[] = ["cross", "f2l", "oll", "pll"];
 
@@ -21,13 +22,6 @@ export function moveCount(alg: string): number {
     .length;
 }
 
-const AUF = ["", "U", "U'", "U2"];
-const NON_EMPTY_AUF = ["U", "U'", "U2"];
-
-function randomChoice<T>(items: T[]): T {
-  return items[Math.floor(Math.random() * items.length)];
-}
-
 export function joinAlgs(parts: Array<string | null | undefined>): string {
   return parts
     .map((part) => (part ?? "").trim())
@@ -36,21 +30,17 @@ export function joinAlgs(parts: Array<string | null | undefined>): string {
     .trim();
 }
 
-export function buildContextForStage(stage: Stage): string {
-  const randomAuf = randomChoice(AUF);
-  const nonEmptyAuf = randomChoice(NON_EMPTY_AUF);
-
-  switch (stage) {
-    case "cross":
-      return "";
-    case "f2l":
-      // Keep setup short while ensuring the case does not usually end solved.
-      return joinAlgs([nonEmptyAuf]);
-    case "oll":
-      return joinAlgs([nonEmptyAuf]);
-    case "pll":
-      return joinAlgs([nonEmptyAuf ?? randomAuf]);
-    default:
-      return "";
+export function deriveCaseSetup(stageCase: AlgorithmCase): string {
+  if (stageCase.stage === "cross") {
+    return stageCase.setup;
   }
+  const primarySolution = stageCase.solutions[0]?.alg?.trim() ?? "";
+  if (primarySolution.length > 0) {
+    try {
+      return new Alg(primarySolution).invert().toString();
+    } catch {
+      // Fallback to authored setup when the algorithm parser rejects input.
+    }
+  }
+  return stageCase.baseSetup;
 }

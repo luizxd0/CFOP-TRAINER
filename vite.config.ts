@@ -11,6 +11,11 @@ const base =
 export default defineConfig({
   base,
   plugins: [react()],
+  optimizeDeps: {
+    // `cubing` uses dynamic worker entry modules that can break Vite's pre-bundler cache.
+    // Excluding avoids "search-worker-entry.js does not exist" invalidation loops.
+    exclude: ["cubing", "search-worker-entry"],
+  },
   server: {
     host: "0.0.0.0",
     allowedHosts: ["classic-gunbound.servegame.com"],
