@@ -8,14 +8,23 @@ import {
   requestCasePreview,
   subscribeCasePreview,
 } from "../lib/casePreview";
+import type { CubeSkin } from "../types/app";
+
+const FULL_STICKERING_MASK = "EDGES:------------,CORNERS:--------,CENTERS:------";
+const F2L_STICKERING_MASK_BY_ORIENTATION: Record<CubeOrientation, string> = {
+  "white-top": "EDGES:IIII--------,CORNERS:IIII----,CENTERS:I-----",
+  "yellow-top": "EDGES:----IIII----,CORNERS:----IIII,CENTERS:-----I",
+};
 
 export function CasePreview({
   activeCase,
   cubeOrientation,
+  cubeSkin = "classic",
   compact = false,
 }: {
   activeCase: AlgorithmCase;
   cubeOrientation: CubeOrientation;
+  cubeSkin?: CubeSkin;
   compact?: boolean;
 }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
@@ -23,7 +32,11 @@ export function CasePreview({
     orientationPrefix(cubeOrientation),
     activeCase.diagramSetup ?? activeCase.baseSetup,
   ]);
-  const previewKey = `${setup}|${compact ? "compact" : "detail"}`;
+  const stickeringMask =
+    cubeSkin === "f2l"
+      ? F2L_STICKERING_MASK_BY_ORIENTATION[cubeOrientation]
+      : FULL_STICKERING_MASK;
+  const previewKey = `${setup}|${stickeringMask}|${compact ? "compact" : "detail"}`;
   const [previewSrc, setPreviewSrc] = useState(() => readCasePreviewFromCache(previewKey));
   const [visible, setVisible] = useState(false);
 
@@ -63,7 +76,7 @@ export function CasePreview({
         setPreviewSrc(readCasePreviewFromCache(previewKey));
       }
     });
-    void requestCasePreview({ key: previewKey, setup, compact }).then((src) => {
+    void requestCasePreview({ key: previewKey, setup, compact, stickeringMask }).then((src) => {
       if (!cancelled) {
         setPreviewSrc(src);
       }
@@ -72,7 +85,7 @@ export function CasePreview({
       cancelled = true;
       unsubscribe();
     };
-  }, [compact, previewKey, previewSrc, setup, visible]);
+  }, [compact, previewKey, previewSrc, setup, stickeringMask, visible]);
 
   return (
     <div className={compact ? "case-preview compact" : "case-preview"} ref={hostRef}>

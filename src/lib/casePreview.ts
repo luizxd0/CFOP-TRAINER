@@ -4,6 +4,7 @@ export type CasePreviewRequest = {
   key: string;
   setup: string;
   compact: boolean;
+  stickeringMask: string;
 };
 
 const FULL_STICKERING_MASK = "EDGES:------------,CORNERS:--------,CENTERS:------";
@@ -103,6 +104,8 @@ async function renderCasePreview(request: CasePreviewRequest): Promise<string> {
   await awaitTwistyIntersectedCallback(player);
   player.experimentalSetupAlg = request.setup;
   player.alg = "";
+  player.experimentalStickering = "full";
+  player.experimentalStickeringMaskOrbits = request.stickeringMask;
   player.experimentalFaceletScale = request.compact ? 0.88 : 0.92;
   player.cameraDistance = request.compact ? 6.6 : 5.85;
   player.jumpToStart({ flash: false });

@@ -593,6 +593,7 @@ button:disabled {
 }
 
 .learn-pick-toggle,
+.learn-state-cycle,
 .practice-detail-strip button,
 .practice-action-grid button {
   min-height: 30px;
@@ -603,6 +604,13 @@ button:disabled {
   padding: 0 9px;
   font-size: 0.72rem;
   font-weight: 900;
+}
+
+.learn-state-cycle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
 }
 
 .learn-case-card.queued .learn-pick-toggle {
@@ -1686,6 +1694,12 @@ code {
   .smart-panel {
     position: static;
     grid-column: 1 / -1;
+  }
+}
+
+@media (min-width: 821px) {
+  .learn-progress-segmented {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 

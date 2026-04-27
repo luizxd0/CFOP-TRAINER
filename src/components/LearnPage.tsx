@@ -3,6 +3,8 @@ import type { AlgorithmCase } from "../data/cfopData";
 import { CasePreview } from "./CasePreview";
 import { recordForCase, timingStatsLabel, type CustomAlgorithm, type LearningCaseRecord, type LearningData, type LearningProgressFilter, type LearningProgressState } from "../lib/learning";
 import type { CubeOrientation } from "../lib/notation";
+import type { CubeSkin } from "../types/app";
+import { RotateCcw } from "lucide-react";
 
 type LearnStage = "f2l" | "oll" | "pll";
 type LearningSubsetFilter = "all" | "2look-oll" | "2look-pll" | "full-oll" | "full-pll";
@@ -28,6 +30,8 @@ export function LearnPage({
   selectedLearnCase,
   selectedLearnRecord,
   cubeOrientation,
+  cubeSkin,
+  onCubeSkinChange,
   onTogglePracticeSelection,
   onCycleLearningState,
   onSelectLearnCaseId,
@@ -63,6 +67,8 @@ export function LearnPage({
   selectedLearnCase: AlgorithmCase;
   selectedLearnRecord: LearningCaseRecord;
   cubeOrientation: CubeOrientation;
+  cubeSkin: CubeSkin;
+  onCubeSkinChange: (skin: CubeSkin) => void;
   onTogglePracticeSelection: (caseId: string) => void;
   onCycleLearningState: (caseId: string) => void;
   onSelectLearnCaseId: (caseId: string) => void;
@@ -78,6 +84,8 @@ export function LearnPage({
   onSaveCustomAlgorithm: () => void;
   onClearCustomAlgorithmDraft: () => void;
 }) {
+  const previewSkin: CubeSkin = learnStage === "f2l" ? cubeSkin : "classic";
+
   return (
     <section className="learn-page">
       <header className="topbar">
@@ -158,7 +166,7 @@ export function LearnPage({
           <label className="field-label" htmlFor="learn-progress">
             Progress
           </label>
-          <div className="segmented" id="learn-progress">
+          <div className="segmented learn-progress-segmented" id="learn-progress">
             {(["all", "unknown", "learning", "learned"] as const).map((state) => (
               <button
                 key={state}
@@ -169,6 +177,28 @@ export function LearnPage({
               </button>
             ))}
           </div>
+
+          {learnStage === "f2l" && (
+            <>
+              <label className="field-label" htmlFor="learn-cube-skin">
+                Preview Skin
+              </label>
+              <div className="segmented" id="learn-cube-skin">
+                <button
+                  className={cubeSkin === "f2l" ? "active" : ""}
+                  onClick={() => onCubeSkinChange("f2l")}
+                >
+                  F2L
+                </button>
+                <button
+                  className={cubeSkin === "classic" ? "active" : ""}
+                  onClick={() => onCubeSkinChange("classic")}
+                >
+                  Classic
+                </button>
+              </div>
+            </>
+          )}
 
           <label className="field-label" htmlFor="learn-search">
             Search
@@ -225,23 +255,35 @@ export function LearnPage({
                     tabIndex={0}
                     onClick={() => {
                       onSelectLearnCaseId(item.id);
-                      onCycleLearningState(item.id);
                     }}
                     onKeyDown={(event) => {
                       if (event.key === "Enter" || event.key === " ") {
                         event.preventDefault();
                         onSelectLearnCaseId(item.id);
-                        onCycleLearningState(item.id);
                       }
                     }}
-                    title="Click to cycle progress"
+                    title="Click to select"
                   >
-                    <CasePreview activeCase={item} cubeOrientation={cubeOrientation} compact />
+                    <CasePreview
+                      activeCase={item}
+                      cubeOrientation={cubeOrientation}
+                      cubeSkin={previewSkin}
+                      compact
+                    />
                     <span>{item.name}</span>
                     <strong>{record.state}</strong>
                     <small>{item.group}</small>
                     <small>{timingStatsLabel(record)}</small>
                   </div>
+                  <button
+                    className="learn-state-cycle"
+                    onClick={() => onCycleLearningState(item.id)}
+                    title="Cycle learning state"
+                    aria-label={`Cycle learning state for ${item.name}`}
+                  >
+                    <RotateCcw size={14} />
+                    Cycle state
+                  </button>
                   <button
                     className="learn-pick-toggle"
                     onClick={() => onTogglePracticeSelection(item.id)}
@@ -261,7 +303,11 @@ export function LearnPage({
               <h2>{selectedLearnCase.name}</h2>
             </div>
           </div>
-          <CasePreview activeCase={selectedLearnCase} cubeOrientation={cubeOrientation} />
+          <CasePreview
+            activeCase={selectedLearnCase}
+            cubeOrientation={cubeOrientation}
+            cubeSkin={previewSkin}
+          />
           <div className="practice-detail-strip">
             <span>{timingStatsLabel(selectedLearnRecord)}</span>
             <button onClick={() => onTogglePracticeSelection(selectedLearnCase.id)}>

@@ -111,6 +111,7 @@ function App() {
   const [cubeOrientation, setCubeOrientation] =
     useState<CubeOrientation>("yellow-top");
   const [cubeSkin, setCubeSkin] = useState<CubeSkin>("classic");
+  const [learnCubeSkin, setLearnCubeSkin] = useState<CubeSkin>("f2l");
   const [mirrorHintsEnabled, setMirrorHintsEnabled] = useState(true);
   const [smartCubeConnected, setSmartCubeConnected] = useState(false);
   const [smartCubeMoves, setSmartCubeMoves] = useState<string[]>([]);
@@ -1133,6 +1134,8 @@ function App() {
             selectedLearnCase={selectedLearnCase}
             selectedLearnRecord={selectedLearnRecord}
             cubeOrientation={cubeOrientation}
+            cubeSkin={learnCubeSkin}
+            onCubeSkinChange={setLearnCubeSkin}
             onTogglePracticeSelection={togglePracticeSelection}
             onCycleLearningState={cycleLearningState}
             onSelectLearnCaseId={setSelectedLearnCaseId}
