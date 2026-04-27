@@ -98,15 +98,15 @@ export function LearnPage({
         </div>
         <div className="learn-summary">
           <p>
-            <span>Unknown</span>
+            <span className="learning-state-label unknown">Unknown</span>
             <strong>{progressTotals.unknown}</strong>
           </p>
           <p>
-            <span>Learning</span>
+            <span className="learning-state-label learning">Learning</span>
             <strong>{progressTotals.learning}</strong>
           </p>
           <p>
-            <span>Learned</span>
+            <span className="learning-state-label learned">Learned</span>
             <strong>{progressTotals.learned}</strong>
           </p>
         </div>
@@ -170,7 +170,11 @@ export function LearnPage({
             {(["all", "unknown", "learning", "learned"] as const).map((state) => (
               <button
                 key={state}
-                className={learnProgressFilter === state ? "active" : ""}
+                className={
+                  state === "all"
+                    ? (learnProgressFilter === state ? "active" : "")
+                    : `${state} ${learnProgressFilter === state ? "active" : ""}`.trim()
+                }
                 onClick={() => onLearnProgressFilterChange(state)}
               >
                 {state === "all" ? "All" : state}
@@ -271,7 +275,7 @@ export function LearnPage({
                       compact
                     />
                     <span>{item.name}</span>
-                    <strong>{record.state}</strong>
+                    <strong className={`learn-state-text ${record.state}`}>{record.state}</strong>
                     <small>{item.group}</small>
                     <small>{timingStatsLabel(record)}</small>
                   </div>
@@ -318,7 +322,7 @@ export function LearnPage({
             {(["unknown", "learning", "learned"] as const).map((state) => (
               <button
                 key={state}
-                className={selectedLearnRecord.state === state ? "active" : ""}
+                className={`${state} ${selectedLearnRecord.state === state ? "active" : ""}`.trim()}
                 onClick={() => onSetLearningState(selectedLearnCase.id, state)}
               >
                 {state}
